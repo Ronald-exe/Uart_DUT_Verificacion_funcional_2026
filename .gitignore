@@ -1,0 +1,14 @@
+# Artefactos de VCS / Verdi / URG
+sim/simv
+sim/simv.daidir/
+sim/csrc/
+sim/*.vdb/
+sim/cov_report/
+sim/ucli.key
+sim/vc_hdrs.h
+sim/verdi_config_file
+sim/*.log
+sim/*.fsdb
+sim/verdiLog/
+sim/novas*
+sim/.fsm.sch.verilog.xml
