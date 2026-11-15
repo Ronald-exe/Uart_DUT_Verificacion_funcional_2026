@@ -4,6 +4,10 @@
 
 +incdir+../rtl
 +incdir+../tb
++incdir+../tb/wb_agent
++incdir+../tb/ser_agent
++incdir+../tb/ral
++incdir+../tb/uart_env
 
 // ---- RTL del DUT (no modificar) ----
 ../rtl/raminfr.v
@@ -24,6 +28,10 @@
 ../tb/uart_wb_sva.sv
 
 // ---- Ambiente UVM (agreguen aquí sus paquetes, antes de tb_top) ----
+../tb/wb_agent/wb_pkg.sv
+../tb/ser_agent/ser_pkg.sv
+../tb/ral/ral_pkg.sv
+../tb/uart_env/uart_env_pkg.sv
 ../tb/uart_hello_pkg.sv
 
 // ---- Top ----

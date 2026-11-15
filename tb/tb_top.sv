@@ -11,7 +11,8 @@ module tb_top;
 
   import uvm_pkg::*;
   `include "uvm_macros.svh"
-  import uart_hello_pkg::*;   // agreguen aquí el paquete de su ambiente
+  import uart_hello_pkg::*;
+  import uart_env_pkg::*;
 
   // ---------------------------------------------------------------------------
   // Reloj y reset
