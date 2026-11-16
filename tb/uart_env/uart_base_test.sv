@@ -1,5 +1,3 @@
-// Keep one test class and select traffic through plusargs
-// Changing the count or seed should not require another test class or a recompile
 class uart_base_test extends uvm_test;
   `uvm_component_utils(uart_base_test)
   uart_env_cfg cfg;
@@ -9,13 +7,9 @@ class uart_base_test extends uvm_test;
     super.new(name, parent);
   endfunction
 
-  // Get the interfaces from the top and validate configuration before building the environment
-  // Reject the 8-bit variant here because the original adapter only translates the 32-bit bus
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
-`ifdef DATA_BUS_WIDTH_8
-    `uvm_fatal("UART_BUS_WIDTH", "El adaptador original requiere el bus de 32 bits; BUS8 pendiente")
-`endif
+
     cfg = uart_env_cfg::type_id::create("cfg");
     if (!uvm_config_db#(virtual wb_if)::get(this, "", "wb_vif", cfg.wb.vif))
       `uvm_fatal("UART_VIF", "No se encontro wb_vif")
@@ -23,15 +17,13 @@ class uart_base_test extends uvm_test;
       `uvm_fatal("UART_VIF", "No se encontro ser_vif")
     if (!uvm_config_db#(virtual modem_if)::get(this, "", "mdm_vif", cfg.mdm_vif))
       `uvm_fatal("UART_VIF", "No se encontro mdm_vif")
-    // Use this component as the config report context so the messages have a useful UVM path
+    // Validate knobs before creating children -- otherwise some components may build with settings we later reject
+    // Pass this test as the report context because cfg itself has no component path -- alex
     cfg.parse_plusargs(this);
     uvm_config_db#(uart_env_cfg)::set(this, "env", "cfg", cfg);
     env = uart_env::type_id::create("env", this);
   endfunction
 
-  // Only include LCR, IER and SCR in this reset check for now
-  // They have stable readable values and implemented backdoor paths
-  // Exclude the others from this specific sequence -- leave the rest of the checking alone
   function void end_of_elaboration_phase(uvm_phase phase);
     uvm_reg registers[$];
     super.end_of_elaboration_phase(phase);
@@ -40,17 +32,18 @@ class uart_base_test extends uvm_test;
       if ((registers[i] != env.regm.LCR) &&
           (registers[i] != env.regm.IER) &&
           (registers[i] != env.regm.SCR)) begin
+        // The generic reset and bit-bash sequences cannot manage DLAB banking or FIFO/status side effects
+        // Keep their E2 scope at LCR, IER and SCR -- NO_REG_TESTS applies to both sequences, not just reset -- alex
         uvm_resource_db#(bit)::set({"REG::", registers[i].get_full_name()},
-                                  "NO_REG_HW_RESET_TEST", 1, this);
+                                  "NO_REG_TESTS", 1, this);
       end
     end
   endfunction
 
-  // Raise the objection before starting so UVM does not finish while traffic is still running
-  // Run a watchdog beside the sequence because a missing handshake would otherwise wait forever
   task run_phase(uvm_phase phase);
     uart_main_vseq seq;
     bit completed;
+    // Hold the phase while the sequence blocks on driver handshakes -- an idle moment on the pins is not test completion -- alex
     phase.raise_objection(this);
     seq = uart_main_vseq::type_id::create("main_sequence");
     completed = 0;
@@ -60,13 +53,14 @@ class uart_base_test extends uvm_test;
         completed = 1;
       end
       begin
+        // The driver timeout only covers its own request -- this watchdog also catches a stuck RAL or sequence wait -- alex
         repeat (cfg.timeout_cycles) @(cfg.wb.vif.drv_cb);
         `uvm_fatal("UART_TIMEOUT", "La secuencia excedio su presupuesto de ciclos")
       end
     join_any
     disable fork;
-    // Let the last observations reach the scoreboard before handing over the final counts
-    // Only set targets after completion so a killed sequence cannot look like a completed run
+    // Only a sequence that returned may mark the scoreboard finished
+    // Leave three clocks for the last observations to arrive before dropping the phase objection -- alex
     if (completed) begin
       repeat (3) @(cfg.wb.vif.drv_cb);
       env.scb.expect_totals(seq.planned_tx, seq.planned_rx);
@@ -74,16 +68,20 @@ class uart_base_test extends uvm_test;
     phase.drop_objection(this);
   endtask
 
-  // Check the report counts after check phase so pending-data errors also affect the result
-  // Passing this test only covers the implemented E2 checks
   function void report_phase(uvm_phase phase);
     uvm_report_server reports;
     super.report_phase(phase);
+    // Decide the final banner here, after check_phase can report missing observations
+    // Finishing the stimulus sequence by itself is not a pass -- alex
     reports = uvm_report_server::get_server();
-    if ((reports.get_severity_count(UVM_ERROR) == 0) &&
-        (reports.get_severity_count(UVM_FATAL) == 0))
-      `uvm_info("UART_E2_PASS", "Sin errores en el alcance E2: reset RAL y datos normales TX/RX", UVM_NONE)
-    else
-      `uvm_info("UART_E2_FAIL", "Hay errores: revisar los reportes UVM anteriores", UVM_NONE)
+    if ((reports.get_severity_count(UVM_ERROR) != 0) ||
+        (reports.get_severity_count(UVM_FATAL) != 0)) begin
+      `uvm_info("UART_FAIL", "Errors were reported -- inspect the log", UVM_NONE)
+    // A waived DUT discrepancy is still a discrepancy -- keep that distinction in the result consumed by the runner -- alex
+    end else if (cfg.known_bug_checks != 0) begin
+      `uvm_info("UART_PASS_WITH_KNOWN_BUGS", "Checks completed with documented waived DUT discrepancies -- inspect the bug summary", UVM_NONE)
+    end else begin
+      `uvm_info("UART_PASS", "Checks completed without discrepancies", UVM_NONE)
+    end
   endfunction
 endclass : uart_base_test

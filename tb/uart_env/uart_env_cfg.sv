@@ -1,20 +1,15 @@
 
-// Keep the line settings together so changing a format does not mean hunting through sequences
-// These are runtime choices -- the same compiled DUT is used for every seed
-// Some plan defaults still enable pending features -- the E2 profile has to turn those off
 class uart_line_cfg extends uvm_object;
   `uvm_object_utils(uart_line_cfg)
-  // Use a fast region for most runs and a slower tail for the larger divisors
-  // That gives slow baud rates a chance without making every seed take the maximum time
+  // Bias most runs toward short bit periods without removing slow divisors from the default space -- alex
   int unsigned dl_zero_pct = 1;
   int unsigned dl_fast_max = 16;
   int unsigned dl_max = 65535;
   int unsigned dl_tail_pct = 2;
-  // Keep the break knob here because it belongs to LCR -- enabling it still fails the E2 check
+  // This is the DUT transmit-break control -- ser_break_pct below asks the external source to hold RX low -- alex
   int unsigned bc_pct = 5;
-  // Keep the array order fixed because the chosen index goes straight into the format encoding
-  // Data bits are [5,6,7,8] -- stops are [one,extended]
-  // Parity is [none,odd,even,stick-1,stick-0] -- weight zero removes that option
+  // Array position is the encoding used by program_uart -- changing this order changes the chosen format
+  // WLS is [5,6,7,8], stops [one,extended], parity [none,odd,even,stick-1,stick-0] -- alex
   int unsigned wls_w[] = '{1,1,1,1};
   int unsigned stb_w[] = '{1,1};
   int unsigned par_w[] = '{1,1,1,1,1};
@@ -23,16 +18,14 @@ class uart_line_cfg extends uvm_object;
   endfunction
 endclass : uart_line_cfg
 
-// Group the initial register controls here because they are programmed before traffic starts
-// Writing IER or MCR alone does not check whether interrupts or modem signals behave correctly
 class uart_ctrl_cfg extends uvm_object;
   `uvm_object_utils(uart_ctrl_cfg)
-  // Only clear before traffic for now -- clearing an active FIFO would need a discard model
+  // Allow FIFO clears during live traffic too -- the reference model now accounts for the discarded entries -- alex
   int unsigned fcr_clear_pct = 10;
   int unsigned loop_pct = 10;
-  // Trigger choices follow [1,4,8,14] characters
-  // IER and MCR use a percentage per bit -- those values are independent and do not need to add to 100
+  // Trigger weights select [1,4,8,14] characters -- alex
   int unsigned tl_w[] = '{1,1,1,1};
+  // Each bit has its own probability -- these are not mutually exclusive weights and need not sum to 100 -- alex
   int unsigned ier_bit_pct[] = '{50,50,50,50};
   int unsigned mcr_bit_pct[] = '{50,50,50,50};
   function new(string name = "uart_ctrl_cfg");
@@ -40,49 +33,46 @@ class uart_ctrl_cfg extends uvm_object;
   endfunction
 endclass : uart_ctrl_cfg
 
-// These knobs describe the software side -- THR writes and servicing the received characters
-// Keep one iteration as a TX and RX pair so either direction can also be disabled with its count
 class uart_sw_cfg extends uvm_object;
   `uvm_object_utils(uart_sw_cfg)
   int unsigned n_iter = 20;
-  // Use inclusive MIN and MAX so the same generator can do random or fixed traffic
-  // For exactly 50 characters set both limits to 50 -- for no traffic set both to zero
+  // Equal endpoints force a count -- 50/50 requests 50 writes, 0/0 disables this source
+  // This does not promise 50 delivered bytes if another enabled action clears or overflows the FIFO -- alex
   int unsigned tx_burst_min = 0;
   int unsigned tx_burst_max = 255;
   int unsigned tx_data_min = 0;
   int unsigned tx_data_max = 255;
-  // Measure service delay in character times so it still makes sense when the baud rate changes
-  // Delay, blind reads, random accesses, live reset and reconfiguration are still blocked in E2
-  // They need their checking rules before we can enable them
+  // Character times keep a delayed service comparable at different baud rates -- a fixed clock delay would not -- alex
   int unsigned service_delay_min = 0;
   int unsigned service_delay_max = 20;
   int unsigned blind_read_pct = 5;
   int unsigned rand_access_pct = 5;
   int unsigned recfg_pct = 5;
   int unsigned rst_pct = 1;
-  // The order is [interrupt-driven,polling] -- leave the first weight at zero until IRQ service exists
+  // Order is [interrupt-driven,polling] -- a zero weight removes that mode from this run -- alex
   int unsigned mode_w[] = '{1,1};
   function new(string name = "uart_sw_cfg");
     super.new(name);
   endfunction
 endclass : uart_sw_cfg
 
-// Pass one shared configuration through the environment instead of parsing arguments in every component
-// The original agent configs live here too -- no need to change their source defaults
 class uart_env_cfg extends uvm_object;
   `uvm_object_utils(uart_env_cfg)
-  // Separate line, register and software settings so each group has a clear place
-  // Keep the virtual interfaces inside the agent configs that already use them
   uart_line_cfg line;
   uart_ctrl_cfg ctrl;
   uart_sw_cfg sw;
   wb_agent_cfg wb;
   ser_agent_cfg ser;
   virtual modem_if mdm_vif;
-  // TX generation and RX service share one Wishbone master
-  // Use one token so they cannot overlap accesses or interrupt the DLAB programming steps
+  // The scoreboard updates these counters on this shared object -- the final test banner reads the same evidence -- alex
+  modem_agent_cfg mdm;
+  bit waived[1:5];
+  longint unsigned observed_checks;
+  longint unsigned known_bug_checks;
+  int unsigned known_bug_count[1:5];
+  // One token protects a whole bank operation, not just one bus item
+  // Otherwise RX service could access RBR while another worker has temporarily selected DLL -- alex
   semaphore bus_lock;
-  // Keep the planned error knobs visible -- reject them if enabled until stimulus and checking are ready
   int unsigned ser_parity_err_pct = 5;
   int unsigned ser_frame_err_pct = 5;
   int unsigned ser_break_pct = 3;
@@ -91,16 +81,13 @@ class uart_env_cfg extends uvm_object;
   int unsigned ser_baud_err_pct = 5;
   int unsigned ser_baud_err_max = 8;
   int unsigned mdm_toggle_pct = 20;
-  // The per-access timeout catches stuck traffic handshakes
-  // The overall watchdog is also needed because a RAL access can stall outside that traffic helper
+  // Keep a run watchdog as well as the driver timeout -- sequences can block without any active bus request -- alex
   int unsigned run_ral_reset = 1;
   int unsigned bus_timeout_cycles = 1000;
   longint unsigned timeout_cycles;
-  // The plan has a waiver list but the current scoreboard has no waiver handling
-  // Require an empty list so we do not accidentally ignore a real mismatch
+  // An explicitly empty value selects strict checking -- it must not fall back to this default list -- alex
   string waive_bugs = "1,2,3,4,5";
-  // Save the value and where it came from so the log is enough to reconstruct the configuration
-  // Use the test as the report context because this config is an object rather than a component
+  // The seed cannot reproduce a run without its effective knobs -- record defaults as well as overrides -- alex
   string effective[string];
   string origin[string];
   uvm_report_object reporter;
@@ -112,30 +99,30 @@ class uart_env_cfg extends uvm_object;
     sw = uart_sw_cfg::type_id::create("sw");
     wb = wb_agent_cfg::type_id::create("wb");
     ser = ser_agent_cfg::type_id::create("ser");
-    // Set the wider range on our instance -- changing the original agent file would affect other users
+    // Match physical reset before the first observed write -- the standalone serial config starts with DL one -- alex
     ser.burst_max = 255;
+    ser.dl = 0;
+    mdm = modem_agent_cfg::type_id::create("mdm");
     bus_lock = new(1);
   endfunction
 
-  // Parse the digits ourselves because converting directly to unsigned can hide a negative or overflow
-  // Check with a wider temporary first -- only narrow the value after it fits
   function int unsigned decimal(string text, string key);
     longint unsigned number;
     number = 0;
     if ((text.len() == 0) || (text.len() > 10))
       `uvm_fatal_context("UART_ARG", {key, ": entero invalido"}, reporter)
+    // Do not let an unsigned conversion turn a negative or malformed knob into a plausible positive value -- alex
     for (int i = 0; i < text.len(); i++) begin
       if ((text.getc(i) < 48) || (text.getc(i) > 57))
         `uvm_fatal_context("UART_ARG", {key, ": se requiere un entero no negativo"}, reporter)
       number = number * 10 + text.getc(i) - 48;
     end
+    // Accumulate in 64 bits and reject overflow before narrowing to the 32-bit knob type -- alex
     if (number > 64'hffffffff)
       `uvm_fatal_context("UART_ARG", {key, ": entero fuera de rango"}, reporter)
     return int'(number);
   endfunction
 
-  // Keep the default when the argument is absent
-  // Record whether it came from the command line so a default is not mistaken for an explicit choice
   function void read_uint(string key, ref int unsigned value);
     string raw;
     if ($value$plusargs({key, "=%s"}, raw)) begin
@@ -147,8 +134,6 @@ class uart_env_cfg extends uvm_object;
     effective[key] = $sformatf("%0d", value);
   endfunction
 
-  // Read weights as a fixed-length list so a missing element cannot silently shift the choices
-  // Percentages are checked one by one -- weights need a nonzero total for the random pick
   function void read_vector(string key, ref int unsigned values[], input bit percentages = 0);
     string raw;
     string token;
@@ -157,6 +142,8 @@ class uart_env_cfg extends uvm_object;
     if ($value$plusargs({key, "=%s"}, raw)) begin
       token = "";
       index = 0;
+      // The extra iteration closes the final token without needing a trailing comma
+      // A missing or empty entry must fail instead of shifting the meaning of all following weights -- alex
       for (int i = 0; i <= raw.len(); i++) begin
         if ((i == raw.len()) || (raw.getc(i) == 44)) begin
           if (index >= values.size())
@@ -182,25 +169,54 @@ class uart_env_cfg extends uvm_object;
         `uvm_fatal_context("UART_ARG", {key, ": porcentaje mayor que 100"}, reporter)
       raw = {raw, (i == 0) ? "" : ",", $sformatf("%0d", values[i])};
     end
+    // All-zero bit probabilities are valid -- all-zero selection weights would leave choose_weight no possible choice -- alex
     if (!percentages && ((sum == 0) || (sum > 32'hffffffff)))
       `uvm_fatal_context("UART_ARG", {key, ": suma de pesos invalida"}, reporter)
     effective[key] = raw;
   endfunction
 
-  // Keep configuration failures in UVM reporting so the usual report actions still apply
   function void require(bit condition, string message);
     if (!condition)
       `uvm_fatal_context("UART_CFG", message, reporter)
   endfunction
 
-  // Stop at configuration time rather than running with a feature that has no implementation yet
-  function void unsupported(int unsigned value, string name);
-    if (value != 0)
-      `uvm_fatal_context("UART_E2_CAPABILITY", {name, " aun no implementado por los agentes/integracion actuales; usar el perfil plusargs.args"}, reporter)
+  function bit [4:0] waiver_mask();
+    bit [4:0] mask;
+    mask = 0;
+    for (int i = 1; i <= 5; i++) begin
+      // The user-facing list is numbered 1 through 5 -- the packed model switches are bits 0 through 4 -- alex
+      mask[i-1] = waived[i];
+    end
+    return mask;
   endfunction
 
-  // Parse once before creating the environment so every component sees the same validated values
-  // Do the capability checks here too -- unsupported settings should fail before traffic starts
+  function bit bugs_waived(bit [4:0] causes);
+    for (int i = 1; i <= 5; i++) begin
+      // A comparison can involve more than one cause -- every contributing cause has to be enabled -- alex
+      if (causes[i-1] && !waived[i]) begin
+        return 0;
+      end
+    end
+    // An empty cause mask is not a known bug and must not become a waiver -- alex
+    return |causes;
+  endfunction
+
+  function void report_known_bug(bit [4:0] causes, string details, bit force_error = 0);
+    for (int i = 1; i <= 5; i++) begin
+      if (causes[i-1]) begin
+        known_bug_count[i]++;
+      end
+    end
+    // One observation can increment several per-bug counts -- keep a separate total for the number of affected checks -- alex
+    known_bug_checks++;
+    // Recognition and permission are different -- force_error preserves a known-but-unwaived failure -- alex
+    if (!force_error && bugs_waived(causes)) begin
+      `uvm_warning_context("UART_KNOWN_BUG", details, reporter)
+    end else begin
+      `uvm_error_context("UART_KNOWN_BUG", details, reporter)
+    end
+  endfunction
+
   function void parse_plusargs(uvm_report_object context_reporter);
     string args[$];
     string key;
@@ -209,7 +225,6 @@ class uart_env_cfg extends uvm_object;
     uvm_cmdline_processor command_line;
     reporter = context_reporter;
 
-    // Read the scalar knobs in groups that match the plan so it is easier to find a setting
     read_uint("UART_LCR_DL_ZERO_PCT", line.dl_zero_pct);
     read_uint("UART_LCR_DL_FAST_MAX", line.dl_fast_max);
     read_uint("UART_LCR_DL_MAX", line.dl_max);
@@ -246,7 +261,6 @@ class uart_env_cfg extends uvm_object;
     read_uint("UART_MDM_TOGGLE_PCT", mdm_toggle_pct);
     read_uint("UART_RAL_HW_RESET", run_ral_reset);
     read_uint("UART_BUS_TIMEOUT_CYCLES", bus_timeout_cycles);
-    // Read the lists separately because they need both length and weight checks
     read_vector("UART_LCR_WLS_WEIGHTS", line.wls_w, 0);
     read_vector("UART_LCR_STB_WEIGHTS", line.stb_w, 0);
     read_vector("UART_LCR_PAR_WEIGHTS", line.par_w, 0);
@@ -255,8 +269,8 @@ class uart_env_cfg extends uvm_object;
     read_vector("UART_MCR_BIT_PCT", ctrl.mcr_bit_pct, 1);
     read_vector("UART_SW_MODE_WEIGHTS", sw.mode_w, 0);
 
-    // An empty waiver value is valid here -- checking only the string conversion can miss it
-    // First detect the argument itself and then read whatever follows the equals sign
+    // +UART_SCB_WAIVE_BUGS= is intentional strict mode
+    // A %s conversion alone can miss the empty value and accidentally retain the default waivers -- alex
     key = "UART_SCB_WAIVE_BUGS";
     if ($test$plusargs({key, "="})) begin
       raw = "";
@@ -268,8 +282,7 @@ class uart_env_cfg extends uvm_object;
     end
     effective[key] = waive_bugs;
 
-    // A value can fit its type and still make no sense for the test
-    // Check the range pairs, divisor regions and percentages before using them in random picks
+    // Check relationships too -- individually valid endpoints can still define an empty random range -- alex
     require(sw.n_iter > 0, "UART_SW_ITER debe ser positivo");
     require((sw.tx_burst_min <= sw.tx_burst_max) && (sw.tx_burst_max <= 255), "Rango TX invalido");
     require((ser.burst_min <= ser.burst_max) && (ser.burst_max <= 255), "Rango RX invalido");
@@ -278,6 +291,8 @@ class uart_env_cfg extends uvm_object;
     require(sw.service_delay_min <= sw.service_delay_max, "Retraso de servicio invertido");
     require((line.dl_fast_max > 0) && (line.dl_fast_max <= line.dl_max) &&
             (line.dl_max <= 65535), "Rango DL invalido");
+    // Zero, fast and tail are branches of one draw -- zero and tail probabilities share the same 100 percent budget
+    // If the tail is enabled there must be at least one divisor strictly above the fast range -- alex
     require((line.dl_zero_pct <= 100) && (line.dl_tail_pct <= 100) &&
             (line.dl_zero_pct + line.dl_tail_pct <= 100) &&
             ((line.dl_tail_pct == 0) || (line.dl_fast_max < line.dl_max)), "Distribucion DL invalida");
@@ -293,10 +308,11 @@ class uart_env_cfg extends uvm_object;
 
     require(longint'(ser.gap_max) * 16 * line.dl_max <= 32'hffffffff,
             "GAP_MAX por periodo de bit desborda el contador del driver original");
+    // The request timer includes the intentional driver delays -- leave room for those before calling ACK late -- alex
     require(longint'(wb.delay_max) + wb.stb_delay_max + 16 < bus_timeout_cycles,
             "BUS_TIMEOUT_CYCLES debe superar los retardos WB mas el handshake");
 
-    // Catch misspelled UART arguments here -- otherwise a typo could leave a default active unnoticed
+    // Without this pass a misspelled +UART_ knob silently leaves the default active -- alex
     command_line = uvm_cmdline_processor::get_inst();
     void'(command_line.get_plusargs(args));
     foreach (args[i]) begin
@@ -315,47 +331,50 @@ class uart_env_cfg extends uvm_object;
           `uvm_fatal_context("UART_UNKNOWN_ARG", {"Plusarg desconocido: ", key}, reporter)
       end
     end
-    // Print defaults too -- the seed by itself is not enough to reproduce a run with different knobs
     foreach (effective[name])
       `uvm_info_context("UART_CFG", $sformatf("%s=%s (%s)", name, effective[name], origin[name]), UVM_LOW, reporter)
 
-    // Keep this list explicit while E2 is incomplete
-    // The plusargs file disables these features -- remove a check only when its real support is added
-    unsupported(line.bc_pct, "Break TX");
-    unsupported(line.dl_zero_pct, "Trafico con DL=0");
-    unsupported(ctrl.loop_pct, "Loopback");
-    unsupported(sw.mode_w[0], "Servicio por interrupciones");
-    unsupported(sw.service_delay_max, "Retraso de servicio con posible overrun");
-    unsupported(sw.blind_read_pct, "Lecturas ciegas concurrentes con RX");
-    unsupported(sw.rand_access_pct, "Accesos de robustez");
-    unsupported(sw.recfg_pct, "Reconfiguracion durante trafico");
-    unsupported(sw.rst_pct, "Reset durante trafico");
-    unsupported(wb.sel_odd_pct, "Seleccion WB irregular");
-    unsupported(ser_parity_err_pct, "Inyeccion PE");
-    unsupported(ser_frame_err_pct, "Inyeccion FE");
-    unsupported(ser_break_pct, "Break RX");
-    unsupported(ser_stop2_err_pct, "Inyeccion STOP2");
-    unsupported(ser_glitch_pct, "Glitch RX");
-    unsupported(ser_baud_err_pct, "Desajuste de baud");
-    unsupported(mdm_toggle_pct, "Estimulo modem");
-    require(waive_bugs == "", "En E2 el scoreboard es estricto: usar +UART_SCB_WAIVE_BUGS=");
+    // Start strict, then enable only listed bug numbers -- no token may stand for an unclassified discrepancy -- alex
+    foreach (waived[i]) begin
+      waived[i] = 0;
+    end
+    if (waive_bugs != "") begin
+      string token;
+      int unsigned number;
+      token = "";
+      for (int i = 0; i <= waive_bugs.len(); i++) begin
+        if ((i == waive_bugs.len()) || (waive_bugs.getc(i) == 44)) begin
+          number = decimal(token, "UART_SCB_WAIVE_BUGS");
+          require((number >= 1) && (number <= 5), "Only BUG-01 to BUG-05 can be waived");
+          waived[number] = 1;
+          token = "";
+        end else begin
+          token = {token, waive_bugs.substr(i, i)};
+        end
+      end
+    end
+    // Propagate the timeout and reset handles after parsing -- use the existing interfaces for all agents -- alex
+    wb.timeout_cycles = bus_timeout_cycles;
+    ser.reset_vif = wb.vif;
+    mdm.vif = mdm_vif;
+    mdm.reset_vif = wb.vif;
+    mdm.toggle_pct = mdm_toggle_pct;
 
-    // Scale the watchdog with the configured traffic and baud rate
-    // A fixed time would kill valid runs with large divisors -- leave extra room for polling and bus work
-    // This only bounds a stuck run -- it does not prove that the timing is correct
+    // Large divisors and delayed service can make a legal run much longer than a normal burst
+    // Raw register writes can also exceed the setup DL_MAX -- budget for 65535 when those accesses are enabled
+    // This is a hang guard, not a baud correctness check -- alex
     timeout_cycles = 10000 + 4 * longint'(sw.n_iter) *
-      (longint'(sw.tx_burst_max + ser.burst_max + 64) * 12 * 16 * line.dl_max +
-       longint'(ser.burst_max) * (ser.gap_max + 12 * longint'(sw.service_delay_max)) * 16 * line.dl_max);
+      (longint'(sw.tx_burst_max + ser.burst_max + 64) * 12 * 16 * ((sw.rand_access_pct == 0) ? line.dl_max : 65535) +
+       longint'(ser.burst_max) * (ser.gap_max + 12 * longint'(sw.service_delay_max)) * 16 * ((sw.rand_access_pct == 0) ? line.dl_max : 65535));
   endfunction
 
-  // Pick from the total weight and subtract each bucket until the pick falls inside one
-  // A zero weight gets no part of the range -- validation already ruled out a zero total
   function int unsigned choose_weight(int unsigned weights[]);
     int unsigned sum;
     int unsigned pick;
     sum = 0;
     foreach (weights[i])
       sum += weights[i];
+    // Treat weights as interval sizes, not percentages -- subtracting a zero bucket gives it no chance of selection -- alex
     pick = $urandom_range(sum - 1, 0);
     foreach (weights[i]) begin
       if (pick < weights[i])
