@@ -274,3 +274,41 @@ class uart_dlm extends uvm_reg;
   endfunction
 
 endclass
+
+// Read the actual 16-bit divisor and select its byte here -- this avoids simulator-specific part-select path lookup -- alex
+class uart_divisor_backdoor extends uvm_reg_backdoor;
+  `uvm_object_utils(uart_divisor_backdoor)
+  bit upper_byte;
+  string path = "tb_top.dut.regs.dl";
+  function new(string name = "uart_divisor_backdoor");
+    super.new(name);
+  endfunction
+  virtual function void read_func(uvm_reg_item rw);
+    uvm_hdl_data_t whole;
+    if (!uvm_hdl_read(path,whole)) begin
+      rw.status = UVM_NOT_OK;
+      return;
+    end
+    if (rw.value.size() == 0) begin
+      rw.value = new[1];
+    end
+    rw.value[0] = upper_byte ? whole[15:8] : whole[7:0];
+    rw.status = $isunknown(whole[15:0]) ? UVM_HAS_X : UVM_IS_OK;
+  endfunction
+  virtual task write(uvm_reg_item rw);
+    uvm_hdl_data_t whole;
+    do_pre_write(rw);
+    if (!uvm_hdl_read(path,whole)) begin
+      rw.status = UVM_NOT_OK;
+    end else begin
+      // Keep the other divisor byte intact -- depositing a byte into the whole vector would corrupt it -- alex
+      if (upper_byte) begin
+        whole[15:8] = rw.value[0][7:0];
+      end else begin
+        whole[7:0] = rw.value[0][7:0];
+      end
+      rw.status = uvm_hdl_deposit(path,whole) ? UVM_IS_OK : UVM_NOT_OK;
+    end
+    do_post_write(rw);
+  endtask
+endclass
