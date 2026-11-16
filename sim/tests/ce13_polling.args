@@ -1,0 +1,3 @@
+// Use polling and include reads without checking DR first
++UART_SW_MODE_WEIGHTS=0,1
++UART_SW_BLIND_READ_PCT=50

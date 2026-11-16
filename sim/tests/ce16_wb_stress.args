@@ -1,0 +1,3 @@
+// Remove optional bus delay and include the odd SEL side effects defined by AMB-06
++UART_WB_DELAY_MAX=0
++UART_WB_SEL_ODD_PCT=20

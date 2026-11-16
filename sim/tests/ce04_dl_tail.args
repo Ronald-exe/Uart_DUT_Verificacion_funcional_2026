@@ -1,0 +1,8 @@
+// Select only the divisor tail -- disable the zero bucket so the percentages remain consistent
++UART_LCR_DL_ZERO_PCT=0
++UART_LCR_DL_TAIL_PCT=100
++UART_SW_ITER=2
++UART_SW_TX_BURST_MAX=2
++UART_SER_BURST_MAX=2
+// Keep raw register writes from overriding the setting targeted by this scenario
++UART_SW_RAND_ACCESS_PCT=0

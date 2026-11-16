@@ -1,0 +1,4 @@
+// Select stick parity while leaving all character widths reachable
++UART_LCR_PAR_WEIGHTS=0,0,0,1,1
+// Keep raw register writes from overriding the setting targeted by this scenario
++UART_SW_RAND_ACCESS_PCT=0

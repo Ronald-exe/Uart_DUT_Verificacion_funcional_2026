@@ -1,0 +1,2 @@
+// Allow reset to interrupt bus or serial work
++UART_SW_RST_PCT=30

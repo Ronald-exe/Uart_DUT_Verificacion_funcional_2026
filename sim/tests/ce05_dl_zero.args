@@ -1,0 +1,5 @@
+// Stop the DUT baud generator -- completion must account for explicit FIFO clear rather than wait for TEMT
++UART_LCR_DL_ZERO_PCT=100
++UART_LCR_DL_TAIL_PCT=0
+// Keep raw register writes from overriding the setting targeted by this scenario
++UART_SW_RAND_ACCESS_PCT=0

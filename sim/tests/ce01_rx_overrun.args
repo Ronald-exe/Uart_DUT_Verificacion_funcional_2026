@@ -1,0 +1,3 @@
+// Delay software service long enough to exercise a full receive FIFO
++UART_SW_SERVICE_DELAY_MIN=17
++UART_SW_SERVICE_DELAY_MAX=20

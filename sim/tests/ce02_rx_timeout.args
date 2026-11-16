@@ -1,0 +1,5 @@
+// Keep the receive burst below the trigger and allow the receive timeout to expire
++UART_FCR_TL_WEIGHTS=0,0,0,1
++UART_SER_BURST_MAX=3
++UART_SW_SERVICE_DELAY_MIN=6
++UART_SW_SERVICE_DELAY_MAX=20

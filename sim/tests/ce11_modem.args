@@ -1,0 +1,5 @@
+// Enable only modem interrupts and change the external modem inputs
++UART_MDM_TOGGLE_PCT=100
++UART_IER_BIT_PCT=0,0,0,100
+// Keep raw register writes from overriding the setting targeted by this scenario
++UART_SW_RAND_ACCESS_PCT=0
