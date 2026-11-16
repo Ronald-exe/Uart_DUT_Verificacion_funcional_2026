@@ -1,37 +1,99 @@
-// Use the same test with a profile limited to the capabilities currently implemented
-// Keep one iteration for the first run -- TX and RX counts still default to the full 0 to 255 range
-// Leave line-format weights unchanged so supported formats can still vary across seeds
-+UART_SW_ITER=1
+# Uncomment the options you want to change -- omitted options retain their code defaults
+# The values shown below are those defaults, not a profile selected by the runner
+# Use one active entry per name -- do not enable several copies of the same knob -- alex
 
-// Keep the baud rate fast here so the first integration run does not spend most of its time waiting
-// Disable break and loopback until their stimulus and checking are ready
-+UART_LCR_DL_ZERO_PCT=0
-+UART_LCR_DL_FAST_MAX=8
-+UART_LCR_DL_MAX=8
-+UART_LCR_DL_TAIL_PCT=0
-+UART_LCR_BC_PCT=0
-+UART_MCR_LOOP_PCT=0
+# Traffic counts and payloads
+# Counts are requests per iteration, not guaranteed delivered bytes after reset, clear or overflow
+# Equal MIN and MAX fix the requested count -- use 0 and 0 to disable that source -- alex
+# +UART_SW_ITER=20
+# +UART_SW_TX_BURST_MIN=0
+# +UART_SW_TX_BURST_MAX=255
+# +UART_SW_TX_DATA_MIN=0
+# +UART_SW_TX_DATA_MAX=255
+# +UART_SER_BURST_MIN=0
+# +UART_SER_BURST_MAX=255
+# +UART_SER_DATA_MIN=0
+# +UART_SER_DATA_MAX=255
 
-// Use polling because interrupt-driven service is still pending
-// Turn the other software behaviors off explicitly so the run cannot silently skip requested work
-+UART_SW_MODE_WEIGHTS=0,1
-+UART_SW_SERVICE_DELAY_MIN=0
-+UART_SW_SERVICE_DELAY_MAX=0
-+UART_SW_BLIND_READ_PCT=0
-+UART_SW_RAND_ACCESS_PCT=0
-+UART_SW_RECFG_PCT=0
-+UART_SW_RST_PCT=0
+# Line format
+# Array order matters -- WLS [5,6,7,8], stops [one,extended], parity [none,odd,even,stick-1,stick-0]
+# Weight 0 removes an option -- at least one weight in each list must remain positive
+# For 8N1 use WLS 0,0,0,1 -- stops 1,0 -- parity 1,0,0,0,0 -- alex
+# +UART_LCR_WLS_WEIGHTS=1,1,1,1
+# +UART_LCR_STB_WEIGHTS=1,1
+# +UART_LCR_PAR_WEIGHTS=1,1,1,1,1
 
-// Use regular byte selection and normal serial frames for this stage
-// Leave error injection and modem changes off until those paths have real implementations
-+UART_WB_SEL_ODD_PCT=0
-+UART_SER_PARITY_ERR_PCT=0
-+UART_SER_FRAME_ERR_PCT=0
-+UART_SER_BREAK_PCT=0
-+UART_SER_STOP2_ERR_PCT=0
-+UART_SER_GLITCH_PCT=0
-+UART_SER_BAUD_ERR_PCT=0
-+UART_MDM_TOGGLE_PCT=0
+# Baud divisor
+# ZERO_PCT and TAIL_PCT share the same 100 percent budget
+# Nonzero fast divisors are 1 through FAST_MAX -- the tail is FAST_MAX+1 through MAX
+# To fix a divisor above 1, set ZERO_PCT 0, FAST_MAX one less than it, MAX to it and TAIL_PCT 100
+# When FAST_MAX equals MAX, TAIL_PCT must be 0 because that tail range would be empty -- alex
+# +UART_LCR_DL_ZERO_PCT=1
+# +UART_LCR_DL_FAST_MAX=16
+# +UART_LCR_DL_MAX=65535
+# +UART_LCR_DL_TAIL_PCT=2
 
-// Keep the waiver list empty because the current scoreboard has no known-bug filtering
-+UART_SCB_WAIVE_BUGS=
+# Transmit break and internal loopback
+# Percentages use 0 to disable and 100 to force the choice
+# LCR_BC controls the DUT TX line -- SER_BREAK below controls the external source on RX -- alex
+# +UART_LCR_BC_PCT=5
+# +UART_MCR_LOOP_PCT=10
+
+# FIFO and interrupt control
+# FIFO trigger weights select [1,4,8,14] characters
+# CLEAR_PCT chooses whether to clear -- when selected, RX, TX or both are randomized
+# IER order is [RX available,TX empty,line status,modem status]
+# IER entries are independent percentages, not weights that must add to 100 -- alex
+# +UART_FCR_TL_WEIGHTS=1,1,1,1
+# +UART_FCR_CLEAR_PCT=10
+# +UART_IER_BIT_PCT=50,50,50,50
+
+# Software service
+# Mode weights select [interrupt-driven,polling] -- use 0,1 for polling only
+# Service delays are measured in character times, not Wishbone clocks
+# Random register accesses can independently write THR or change the selected format and divisor
+# Disable RAND_ACCESS_PCT for an isolated fixed-count or fixed-format experiment -- alex
+# +UART_SW_MODE_WEIGHTS=1,1
+# +UART_SW_SERVICE_DELAY_MIN=0
+# +UART_SW_SERVICE_DELAY_MAX=20
+# +UART_SW_BLIND_READ_PCT=5
+# +UART_SW_RAND_ACCESS_PCT=5
+# +UART_SW_RECFG_PCT=5
+# +UART_SW_RST_PCT=1
+
+# Wishbone timing
+# DELAY and STB_DELAY are maximum clock delays -- each access samples 0 through that maximum
+# TIMEOUT must exceed DELAY_MAX + STB_DELAY_MAX + 16
+# Irregular SEL applies to the 32-bit bus -- bus width itself is selected at compilation with BUS8 -- alex
+# +UART_WB_DELAY_MAX=5
+# +UART_WB_STB_DELAY_MAX=3
+# +UART_WB_SEL_ODD_PCT=2
+# +UART_BUS_TIMEOUT_CYCLES=1000
+
+# External serial source
+# GAP_MAX is the maximum number of idle bit periods before a source character
+# Error controls are percentages -- 0 disables the request and 100 requests it whenever compatible
+# Parity errors need parity enabled -- STOP2 errors need extended stops with 6 to 8 data bits
+# A break suppresses the separate parity and stop-error requests for that item
+# BAUD_ERR_MAX bounds the signed percentage offset when a baud variation is selected -- alex
+# +UART_SER_GAP_MAX=60
+# +UART_SER_PARITY_ERR_PCT=5
+# +UART_SER_FRAME_ERR_PCT=5
+# +UART_SER_BREAK_PCT=3
+# +UART_SER_STOP2_ERR_PCT=5
+# +UART_SER_GLITCH_PCT=3
+# +UART_SER_BAUD_ERR_PCT=5
+# +UART_SER_BAUD_ERR_MAX=8
+
+# Modem pins
+# MCR order is [DTR,RTS,OUT1,OUT2] -- each entry is an independent percentage
+# TOGGLE_PCT applies independently to CTS, DSR, RI and DCD -- several inputs can change together -- alex
+# +UART_MCR_BIT_PCT=50,50,50,50
+# +UART_MDM_TOGGLE_PCT=20
+
+# RAL preamble and known DUT bugs
+# RAL_HW_RESET 1 runs the preamble -- 0 skips it
+# WAIVE_BUGS accepts only bug numbers 1 through 5 -- permitted manifestations remain warnings
+# For strict checking uncomment WAIVE_BUGS and erase its value, leaving the equals sign -- alex
+# +UART_RAL_HW_RESET=1
+# +UART_SCB_WAIVE_BUGS=1,2,3,4,5
