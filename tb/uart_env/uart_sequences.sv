@@ -177,6 +177,16 @@ class uart_main_vseq extends uvm_sequence;
   bit [7:0] active_lcr;
   bit [15:0] active_dl;
   longint unsigned planned_tx, planned_rx;
+  // These fields only describe where the workers are waiting -- they never influence a random choice -- alex
+  int unsigned iteration;
+  string stage = "not_started";
+  string service_stage = "idle";
+  string control_stage = "idle";
+  string bus_activity = "idle";
+  longint unsigned service_wait_left;
+  longint unsigned tail_wait_left;
+  int unsigned modem_hold_cycles;
+  bit [7:0] drain_lsr;
   function new(string name = "uart_main_vseq");
     super.new(name);
   endfunction
@@ -194,7 +204,10 @@ class uart_main_vseq extends uvm_sequence;
     seq.write_access = wr;
     seq.write_data = value;
     seq.allow_odd = allow_odd;
+    // Record the actual request before waiting on the driver -- a frozen count then identifies the held transfer -- alex
+    bus_activity = $sformatf("%s_reg%0d", wr ? "write" : "read", index);
     seq.start(p_sequencer.wb_sqr);
+    bus_activity = "idle";
     result = seq.read_data;
   endtask
   task access(bit wr, bit [4:0] index, bit [7:0] value,
@@ -391,16 +404,26 @@ class uart_main_vseq extends uvm_sequence;
     int unsigned delay_chars;
     forever begin
       if (workers_stop) begin
+        service_stage = "done";
         return;
       end
       // IRQ mode waits without polling registers -- those reads could acknowledge the source before we service it -- alex
+      service_stage = "wait_irq";
       if (irq_service && (cfg.wb.vif.irq !== 1)) begin
         @(cfg.wb.vif.drv_cb);
         continue;
       end
       // Deliberately leave received data unserviced -- immediate reads would hide timeout and overrun behavior -- alex
       delay_chars = $urandom_range(cfg.sw.service_delay_max,cfg.sw.service_delay_min);
-      repeat (longint'(delay_chars) * char_cycles()) @(cfg.wb.vif.drv_cb);
+      service_stage = "delay";
+      // VCS narrows repeat counts to 32 bits -- keep the sampled delay and its countdown wide instead -- alex
+      // repeat (longint'(delay_chars) * char_cycles()) @(cfg.wb.vif.drv_cb);
+      service_wait_left = longint'(delay_chars) * char_cycles();
+      while (service_wait_left != 0) begin
+        @(cfg.wb.vif.drv_cb);
+        service_wait_left--;
+      end
+      service_stage = "register_service";
       access(0,2,0,iir);
       access(0,5,0,lsr);
       access(0,6,0,ignored);
@@ -409,6 +432,7 @@ class uart_main_vseq extends uvm_sequence;
         access(0,0,0,ignored);
       end
       if ($urandom_range(99,0) < cfg.sw.rand_access_pct) begin
+        service_stage = "random_register_access";
         random_register_access();
       end
     end
@@ -427,8 +451,10 @@ class uart_main_vseq extends uvm_sequence;
       seq.pins = pins;
       // Leave time between pin changes -- changing every clock would collapse unrelated modem events into the same service window -- alex
       seq.hold_cycles = $urandom_range(char_cycles(),1);
+      modem_hold_cycles = seq.hold_cycles;
       seq.start(p_sequencer.mdm_sqr);
     end
+    modem_hold_cycles = 0;
   endtask
   task live_control(int unsigned span);
     bit do_reset;
@@ -436,27 +462,40 @@ class uart_main_vseq extends uvm_sequence;
     // These are independent events -- a single iteration may reconfigure and later reset, rather than choosing only one -- alex
     do_reset = ($urandom_range(99,0) < cfg.sw.rst_pct);
     do_reconfigure = ($urandom_range(99,0) < cfg.sw.recfg_pct);
+    control_stage = "no_action";
     if (do_reconfigure) begin
+      control_stage = "wait_reconfigure";
       repeat ($urandom_range(span,0)) @(cfg.wb.vif.drv_cb);
+      control_stage = "reconfigure";
       program_uart();
     end
     if (do_reset) begin
+      control_stage = "wait_reset";
       repeat ($urandom_range(span,0)) @(cfg.wb.vif.drv_cb);
       // Reset must be able to interrupt an access -- taking the bus lock first would prevent that scenario -- alex
       @(negedge cfg.wb.vif.clk);
+      control_stage = "reset_asserted";
       cfg.wb.vif.rst = 1;
       repeat ($urandom_range(8,2)) @(negedge cfg.wb.vif.clk);
       // Release reset before program_uart takes the bus lock
       // An interrupted bus owner must be able to finish cancellation and release that lock first -- alex
       cfg.wb.vif.rst = 0;
+      control_stage = "program_after_reset";
       program_uart();
     end
+    control_stage = "done";
     control_done = 1;
   endtask
   task stop_after_sources();
     wait (tx_done && rx_done && control_done);
     // Keep servicing long enough to expose a receive timeout even after a short burst finishes -- alex
-    repeat (longint'(4 + cfg.sw.service_delay_max) * char_cycles()) @(cfg.wb.vif.drv_cb);
+    // Preserve the full character-time tail without the 32-bit repeat truncation reported by VCS -- alex
+    // repeat (longint'(4 + cfg.sw.service_delay_max) * char_cycles()) @(cfg.wb.vif.drv_cb);
+    tail_wait_left = longint'(4 + cfg.sw.service_delay_max) * char_cycles();
+    while (tail_wait_left != 0) begin
+      @(cfg.wb.vif.drv_cb);
+      tail_wait_left--;
+    end
     workers_stop = 1;
   endtask
   task drain();
@@ -464,7 +503,9 @@ class uart_main_vseq extends uvm_sequence;
     bit [7:0] ignored;
     bit [7:0] control;
     control = cfg.ser.lcr;
+    stage = "drain_tx";
     if (cfg.ser.dl == 0) begin
+      stage = "clear_stopped_fifo";
       // A stopped baud generator cannot drain TX -- exercise and account for an explicit FIFO clear instead -- alex
       access(1,2,7,ignored);
       repeat (8) @(cfg.wb.vif.drv_cb);
@@ -473,15 +514,19 @@ class uart_main_vseq extends uvm_sequence;
     // Wait for TEMT, not only THRE -- an empty FIFO can still have a character in the serializer -- alex
     do begin
       access(0,5,0,lsr);
+      drain_lsr = lsr;
     end while (!lsr[6]);
     if (control[6]) begin
       // Release transmit break before the final RX drain -- a looped-back low line can still be holding the receiver in break -- alex
       access(1,3,control & 'hbf,ignored);
     end
     // Allow the receiver path to settle after the transmitter and break control finish before deciding RBR is drained -- alex
+    stage = "receiver_settle";
     repeat (2 * 16 * int'(cfg.ser.source_dl)) @(cfg.wb.vif.drv_cb);
+    stage = "drain_rx";
     do begin
       access(0,5,0,lsr);
+      drain_lsr = lsr;
       if (lsr[0]) begin
         access(0,0,0,ignored);
       end
@@ -495,12 +540,16 @@ class uart_main_vseq extends uvm_sequence;
     int unsigned rx_count;
     int unsigned span;
     cfg = p_sequencer.cfg;
+    stage = "initial_reset";
     wait (cfg.wb.vif.rst === 0);
     repeat (3) @(cfg.wb.vif.drv_cb);
     if (cfg.run_ral_reset) begin
+      stage = "ral_preamble";
       ral_preamble();
     end
     repeat (cfg.sw.n_iter) begin
+      iteration++;
+      stage = "program_uart";
       program_uart();
       irq_service = (cfg.choose_weight(cfg.sw.mode_w) == 0);
       tx_count = $urandom_range(cfg.sw.tx_burst_max,cfg.sw.tx_burst_min);
@@ -512,6 +561,12 @@ class uart_main_vseq extends uvm_sequence;
       rx_done = 0;
       control_done = 0;
       workers_stop = 0;
+      service_stage = "starting";
+      control_stage = "starting";
+      service_wait_left = 0;
+      tail_wait_left = 0;
+      drain_lsr = 0;
+      stage = "traffic";
       span = char_cycles() * ((tx_count > rx_count) ? tx_count+1 : rx_count+1);
       `uvm_info("UART_BURST",$sformatf("TX requests=%0d RX requests=%0d service=%s",tx_count,rx_count,irq_service ? "IRQ" : "polling"),UVM_LOW)
       // Service stays alive after the sources finish -- stop_after_sources supplies the timeout tail and stops both background workers
@@ -526,5 +581,6 @@ class uart_main_vseq extends uvm_sequence;
       join
       drain();
     end
+    stage = "done";
   endtask
 endclass

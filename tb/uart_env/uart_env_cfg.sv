@@ -85,6 +85,8 @@ class uart_env_cfg extends uvm_object;
   int unsigned run_ral_reset = 1;
   int unsigned bus_timeout_cycles = 1000;
   longint unsigned timeout_cycles;
+  // Opt in when debugging -- reporting progress must not select a smaller stimulus space -- alex
+  int unsigned progress_cycles = 0;
   // An explicitly empty value selects strict checking -- it must not fall back to this default list -- alex
   string waive_bugs = "1,2,3,4,5";
   // The seed cannot reproduce a run without its effective knobs -- record defaults as well as overrides -- alex
@@ -261,6 +263,7 @@ class uart_env_cfg extends uvm_object;
     read_uint("UART_MDM_TOGGLE_PCT", mdm_toggle_pct);
     read_uint("UART_RAL_HW_RESET", run_ral_reset);
     read_uint("UART_BUS_TIMEOUT_CYCLES", bus_timeout_cycles);
+    read_uint("UART_PROGRESS_CYCLES", progress_cycles);
     read_vector("UART_LCR_WLS_WEIGHTS", line.wls_w, 0);
     read_vector("UART_LCR_STB_WEIGHTS", line.stb_w, 0);
     read_vector("UART_LCR_PAR_WEIGHTS", line.par_w, 0);
@@ -314,7 +317,9 @@ class uart_env_cfg extends uvm_object;
 
     // Without this pass a misspelled +UART_ knob silently leaves the default active -- alex
     command_line = uvm_cmdline_processor::get_inst();
-    void'(command_line.get_plusargs(args));
+    // get_plusargs already returns void in UVM 1.2 -- casting that return value produces a VCS warning -- alex
+    // void'(command_line.get_plusargs(args));
+    command_line.get_plusargs(args);
     foreach (args[i]) begin
       if ((args[i].len() >= 6) && (args[i].substr(0, 5) == "+UART_")) begin
         equals = args[i].len();

@@ -97,3 +97,8 @@
 # For strict checking uncomment WAIVE_BUGS and erase its value, leaving the equals sign -- alex
 # +UART_RAL_HW_RESET=1
 # +UART_SCB_WAIVE_BUGS=1,2,3,4,5
+
+# Debug progress -- this changes reporting only, not traffic or the allowed random space
+# Use 10000 to print time, current divisor and worker state every 10000 clocks
+# Leave 0 or comment the option to disable reporting -- alex
+# +UART_PROGRESS_CYCLES=0

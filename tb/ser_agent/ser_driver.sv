@@ -17,7 +17,11 @@ class ser_driver extends uvm_driver #(ser_item);
   // Use a wide cycle count so long gaps and slow-divisor break stimulus do not overflow the timing helper -- alex
   task put_bit(bit value, longint unsigned cycles);
     cfg.vif.drv_cb.srx <= value;
-    repeat (cycles) @(cfg.vif.drv_cb);
+    // Keep the full requested gap or break duration -- VCS narrows a repeat expression even when its input is longint -- alex
+    // repeat (cycles) @(cfg.vif.drv_cb);
+    for (longint unsigned elapsed = 0; elapsed < cycles; elapsed++) begin
+      @(cfg.vif.drv_cb);
+    end
   endtask
   task drive_char(ser_item it);
     int unsigned period_cycles;

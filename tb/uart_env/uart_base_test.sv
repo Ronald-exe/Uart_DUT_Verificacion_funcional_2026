@@ -40,6 +40,30 @@ class uart_base_test extends uvm_test;
     end
   endfunction
 
+  task report_progress(uart_main_vseq seq);
+    // Stay blocked when disabled -- returning here would win join_any and cancel the real test -- alex
+    wait (cfg.progress_cycles != 0);
+    forever begin
+      repeat (cfg.progress_cycles) @(negedge cfg.wb.vif.clk);
+      // Sample between active clock edges -- this task observes only and performs no bus or RAL access -- alex
+      `uvm_info("UART_PROGRESS", $sformatf("time=%0t cycle=%0d iter=%0d/%0d stage=%s service=%s control=%s bus=%s done_tx_rx_control=%b%b%b stop=%b service_wait=%0d tail_wait=%0d modem_hold=%0d",
+        $time, env.scb.cycle, seq.iteration, cfg.sw.n_iter, seq.stage,
+        seq.service_stage, seq.control_stage, seq.bus_activity,
+        seq.tx_done, seq.rx_done, seq.control_done, seq.workers_stop,
+        seq.service_wait_left, seq.tail_wait_left, seq.modem_hold_cycles), UVM_LOW)
+      `uvm_info("UART_PROGRESS_STATE", $sformatf("DL_observed=%0d DL_model=%0d source_DL=%0d LCR=%02h MCR=%02h source_active=%b WB_requested=%0d WB_completed=%0d WB_observed=%0d cyc_stb_ack=%b%b%b irq=%b FIFO_tx_rx=%0d/%0d state_tx_rx=%0d/%0d LSR_model=%02h LSR_drain=%02h TX_compared=%0d RX_compared=%0d",
+        cfg.ser.dl, env.scb.expected.dl, cfg.ser.source_dl, cfg.ser.lcr, cfg.ser.mcr,
+        cfg.ser.source_frame_active, cfg.wb.requested_items, cfg.wb.completed_items,
+        env.scb.wb_observed, cfg.wb.vif.mon_cb.cyc, cfg.wb.vif.mon_cb.stb,
+        cfg.wb.vif.mon_cb.ack, cfg.wb.vif.mon_cb.irq,
+        env.scb.expected.tx_count, env.scb.expected.rx_count,
+        env.scb.expected.tx_state, env.scb.expected.rx_state,
+        env.scb.expected.lsr, seq.drain_lsr, env.scb.tx_compared, env.scb.rx_compared), UVM_LOW)
+      // Flush periodic reports so file buffering does not look like a stopped simulation -- alex
+      $fflush();
+    end
+  endtask
+
   task run_phase(uvm_phase phase);
     uart_main_vseq seq;
     bit completed;
@@ -54,9 +78,14 @@ class uart_base_test extends uvm_test;
       end
       begin
         // The driver timeout only covers its own request -- this watchdog also catches a stuck RAL or sequence wait -- alex
-        repeat (cfg.timeout_cycles) @(cfg.wb.vif.drv_cb);
+        // The general budget exceeds 32 bits -- VCS truncated the previous repeat count -- alex
+        // repeat (cfg.timeout_cycles) @(cfg.wb.vif.drv_cb);
+        for (longint unsigned elapsed = 0; elapsed < cfg.timeout_cycles; elapsed++) begin
+          @(cfg.wb.vif.drv_cb);
+        end
         `uvm_fatal("UART_TIMEOUT", "La secuencia excedio su presupuesto de ciclos")
       end
+      report_progress(seq);
     join_any
     disable fork;
     // Only a sequence that returned may mark the scoreboard finished
