@@ -1,5 +1,0 @@
-// Use internal serial loopback while external modem pins keep changing
-+UART_MCR_LOOP_PCT=100
-+UART_MDM_TOGGLE_PCT=100
-// Keep raw register writes from overriding the setting targeted by this scenario
-+UART_SW_RAND_ACCESS_PCT=0

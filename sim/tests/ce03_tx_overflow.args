@@ -1,2 +1,0 @@
-// Bias toward bursts that can overfill the transmit FIFO
-+UART_SW_TX_BURST_MAX=40

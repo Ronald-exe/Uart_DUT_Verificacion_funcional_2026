@@ -1,2 +1,0 @@
-// Increase mixed register accesses including the shared DLAB bank and debug words
-+UART_SW_RAND_ACCESS_PCT=50

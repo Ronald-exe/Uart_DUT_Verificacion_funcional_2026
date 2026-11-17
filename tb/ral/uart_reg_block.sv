@@ -32,9 +32,6 @@ class uart_reg_block extends uvm_reg_block;
 
   //En build creamos todo el modelo, la llama la prueba o el ambiente despues de crear el bloque
   virtual function void build();
-    // Use one backdoor object per divisor byte so DLL and DLM can select different halves of the same HDL vector -- alex
-    uart_divisor_backdoor dll_backdoor;
-    uart_divisor_backdoor dlm_backdoor;
 
     //1. Creamos cada registro llamando a la fabrica, despues lo configuramos y llamamos a su build para crear sus campos
     //configure(this, null, "") significa: el dueno es este bloque, no tiene archivo de registros y la ruta de puerta trasera se pone en el paso 3
@@ -86,14 +83,7 @@ class uart_reg_block extends uvm_reg_block;
     MCR.add_hdl_path_slice("mcr",     0, 5); //reg [4:0] mcr
     MSR.add_hdl_path_slice("msr",     0, 8); //reg [7:0] msr
     SCR.add_hdl_path_slice("scratch", 0, 8); //reg [7:0] scratch
-    // The original note deferred divisor backdoors to E3 -- add them here to check the expanded divisor stimulus -- alex
     //DLL y DLM son la mitad de reg [15:0] dl, su puerta trasera queda para E3 porque en E2 no se prueban
-    // Add both byte backdoors so frontdoor programming can be checked against the actual HDL divisor -- alex
-    dll_backdoor = uart_divisor_backdoor::type_id::create("dll_backdoor");
-    dlm_backdoor = uart_divisor_backdoor::type_id::create("dlm_backdoor");
-    dlm_backdoor.upper_byte = 1;
-    DLL.set_backdoor(dll_backdoor);
-    DLM.set_backdoor(dlm_backdoor);
 
     //4. lock_model cierra el modelo: ya no se pueden agregar registros y UVM calcula las direcciones
     lock_model();

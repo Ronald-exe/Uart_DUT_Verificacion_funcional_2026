@@ -1,16 +1,14 @@
 `timescale 1ns/1ps
+// Import the existing types and collect our classes here so the top only imports one new package
 package uart_env_pkg;
   import uvm_pkg::*;
   import wb_pkg::*;
   import ser_pkg::*;
   import ral_pkg::*;
-  import modem_pkg::*;
   `include "uvm_macros.svh"
-  // This is dependency order -- config needs the agent packages, scoreboard needs the sample and model types
-  // Sequences then need the virtual sequencer, and the test needs the completed environment class -- alex
+  // Keep this order because each included class must see the types it uses
+  // The sequences need the virtual sequencer -- the test needs the completed environment type
   `include "uart_env_cfg.sv"
-  `include "uart_runtime_observers.sv"
-  `include "uart_reference_model.sv"
   `include "uart_scoreboard.sv"
   `include "uart_vsequencer.sv"
   `include "uart_sequences.sv"

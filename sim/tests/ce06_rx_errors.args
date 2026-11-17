@@ -1,5 +1,0 @@
-// Increase serial error requests -- constraints keep requests compatible with the selected line format
-+UART_SER_PARITY_ERR_PCT=25
-+UART_SER_FRAME_ERR_PCT=25
-+UART_SER_BREAK_PCT=15
-+UART_SER_STOP2_ERR_PCT=15

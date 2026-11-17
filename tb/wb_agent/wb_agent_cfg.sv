@@ -11,12 +11,6 @@ int unsigned delay_max = 5;     //maximo de ciclos libres entre acceso
 int unsigned stb_delay_max = 3;  //maximo de cliclos entre cyc = 1 y stb = 1
 int unsigned sel_odd_pct = 2;    //porcentaje de acceso con sel raros
 
-// Bound the driver wait so a missing ACK cannot hang a regression -- alex
-int unsigned timeout_cycles = 1000;
-longint unsigned requested_items;
-longint unsigned completed_items;
-longint unsigned aborted_items;
-
 function new(string name = "wb_agent_cfg");
     super.new(name);
 endfunction

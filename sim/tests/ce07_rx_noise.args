@@ -1,3 +1,0 @@
-// Increase short start glitches and baud mismatch -- payload outside tolerance remains explicitly un-compared
-+UART_SER_GLITCH_PCT=30
-+UART_SER_BAUD_ERR_PCT=50

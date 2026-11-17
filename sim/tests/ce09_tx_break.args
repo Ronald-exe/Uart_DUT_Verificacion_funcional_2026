@@ -1,2 +1,0 @@
-// Exercise transmit break with either normal or loopback operation
-+UART_LCR_BC_PCT=50

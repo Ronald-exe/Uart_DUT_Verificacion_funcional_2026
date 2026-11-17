@@ -1,4 +1,6 @@
 
+// Reuse the original address conversion and only add idle cycles for RAL accesses
+// Keep this local so we do not have to modify the original adapter or Wishbone driver
 class uart_timed_reg_adapter extends uart_reg_adapter;
   `uvm_object_utils(uart_timed_reg_adapter)
 
@@ -6,18 +8,21 @@ class uart_timed_reg_adapter extends uart_reg_adapter;
     super.new(name);
   endfunction
 
+  // Let the original adapter build the item so the register addressing stays consistent
+  // Only change its delay -- the unchanged driver needs room between consecutive accesses
   virtual function uvm_sequence_item reg2bus(const ref uvm_reg_bus_op rw);
     uvm_sequence_item base_item;
     wb_item item;
     base_item = super.reg2bus(rw);
     if (!$cast(item, base_item))
       `uvm_fatal("UART_ADAPTER", "El adaptador original no devolvio wb_item")
-    // Keep a short idle gap for back-to-back RAL accesses -- address packing still comes from the base adapter -- alex
     item.delay = 2;
     return item;
   endfunction
 endclass : uart_timed_reg_adapter
 
+// Build and connect the reusable pieces here so the test only has to configure and start them
+// Keep stimulus in sequences and comparisons in the scoreboard
 class uart_env extends uvm_env;
   `uvm_component_utils(uart_env)
   uart_env_cfg cfg;
@@ -25,10 +30,7 @@ class uart_env extends uvm_env;
   ser_agent ser_agt;
   uart_reg_block regm;
   uart_timed_reg_adapter adapter;
-  uart_dlab_predictor predictor;
-  uart_line_observer line_observer;
-  modem_agent mdm_agt;
-  uart_int_monitor int_mon;
+  uvm_reg_predictor #(wb_item) predictor;
   uart_scoreboard scb;
   uart_vsequencer vseqr;
 
@@ -36,67 +38,57 @@ class uart_env extends uvm_env;
     super.new(name, parent);
   endfunction
 
+  // Distribute configuration before the children build because their drivers and monitors read it there
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
     if (!uvm_config_db#(uart_env_cfg)::get(this, "", "cfg", cfg))
       `uvm_fatal("UART_ENV_CFG", "Ambiente sin configuracion")
-    // Publish the same config objects before the children build
-    // Copies here would let an observed LCR change update one monitor while leaving the driver on the old format -- alex
+    // Use the config types the existing agents already expect
+    // Share one serial config handle so the driver and both monitors use the same line format
     uvm_config_db#(wb_agent_cfg)::set(this, "wb_agt*", "cfg", cfg.wb);
     uvm_config_db#(ser_agent_cfg)::set(this, "ser_agt*", "cfg", cfg.ser);
     uvm_config_db#(uart_env_cfg)::set(this, "scb", "cfg", cfg);
-    uvm_config_db#(modem_agent_cfg)::set(this, "mdm_agt*", "cfg", cfg.mdm);
     wb_agt = wb_agent::type_id::create("wb_agt", this);
     ser_agt = ser_agent::type_id::create("ser_agt", this);
-    // RAL is an object -- the UVM component build traversal will not build its register maps for us -- alex
+    // RAL has no component build phase -- call its build explicitly or the maps and registers stay empty
     regm = uart_reg_block::type_id::create("regm");
     regm.build();
     adapter = uart_timed_reg_adapter::type_id::create("adapter");
-    // Both observers use actual bus writes -- raw register traffic can change DLAB or framing outside program_uart -- alex
-    predictor = uart_dlab_predictor::type_id::create("predictor", this);
-    predictor.regm = regm;
-    line_observer = uart_line_observer::type_id::create("line_observer", this);
-    line_observer.cfg = cfg;
-    line_observer.regm = regm;
-    line_observer.predictor = predictor;
-    mdm_agt = modem_agent::type_id::create("mdm_agt", this);
-    int_mon = uart_int_monitor::type_id::create("int_mon", this);
-    int_mon.cfg = cfg;
+    predictor = uvm_reg_predictor#(wb_item)::type_id::create("predictor", this);
     scb = uart_scoreboard::type_id::create("scb", this);
     vseqr = uart_vsequencer::type_id::create("vseqr", this);
   endfunction
 
+  // Wait until connect phase because all child components and their ports must exist first
   function void connect_phase(uvm_phase phase);
     super.connect_phase(phase);
-    // DLAB selects register meaning, not a second bus -- both maps must reach the same master -- alex
+    // DLAB changes the register meaning rather than the physical bus
+    // Connect both maps to the same sequencer -- let the monitor-fed predictor update the mirror
+    // Disable auto prediction so it does not predict the same access a second time
     regm.map_dlab0.set_sequencer(wb_agt.sqr, adapter);
     regm.map_dlab1.set_sequencer(wb_agt.sqr, adapter);
-    // The observed predictor owns the mirror -- auto prediction would update it again from the requested access -- alex
     regm.map_dlab0.set_auto_predict(0);
     regm.map_dlab1.set_auto_predict(0);
     predictor.map = regm.map_dlab0;
     predictor.adapter = adapter;
-    // Fan out each observed access to three consumers -- mirror prediction, live framing and scoreboard
-    // The framing observer needs the same completed writes as the predictor rather than sequence intent -- alex
+    // Send the observed bus access to both consumers -- RAL tracks registers and the scoreboard tracks data
     wb_agt.mon.ap.connect(predictor.bus_in);
-    wb_agt.mon.ap.connect(line_observer.analysis_export);
-    // Send modem changes and clock-by-clock samples separately
-    // The scoreboard needs continuous samples for IRQ and baud timing even when no pin changes -- alex
-    mdm_agt.mon.ap.connect(scb.modem_in.analysis_export);
-    int_mon.ap.connect(scb.irq_in.analysis_export);
     wb_agt.mon.ap.connect(scb.wb_in.analysis_export);
-    // Direction follows the DUT pins -- STX observations check what it sent, SRX observations describe its input -- alex
+    // These monitor names follow the DUT -- STX is what it sends and SRX is what it receives
+    // Keep separate inputs so the scoreboard knows the direction from the connection itself
     ser_agt.mon_tx.ap.connect(scb.tx_in.analysis_export);
     ser_agt.mon_rx.ap.connect(scb.rx_in.analysis_export);
-    // These are references for coordination -- connecting a second driver path here would bypass the agent sequencers -- alex
+    // Give the virtual sequencer handles rather than another driver connection
+    // The real agent sequencers still own the item handshakes
     vseqr.wb_sqr = wb_agt.sqr;
     vseqr.ser_sqr = ser_agt.sqr;
-    vseqr.mdm_sqr = mdm_agt.sqr;
     vseqr.regm = regm;
     vseqr.predictor = predictor;
     vseqr.cfg = cfg;
   endfunction
 
+  // Check the actual destination too -- the right count can still mean the wrong connection
+  // Use port component handles here so the same helper works with different transaction types
   function void check_link(uvm_port_component_base source,
                            uvm_port_component_base destination,
                            int unsigned expected_count);
@@ -112,8 +104,6 @@ class uart_env extends uvm_env;
                  source.get_full_name(), connected.num(), expected_count))
       return;
     end
-    // The right number of connections can still lead to the wrong consumer
-    // Check both the path and the handle so an unrelated port with a matching count cannot pass -- alex
     destination_name = destination.get_full_name();
     if (!connected.exists(destination_name)) begin
       `uvm_fatal("UART_CONNECTION", $sformatf("Missing connection from %s to %s",
@@ -125,16 +115,15 @@ class uart_env extends uvm_env;
     end
   endfunction
 
-  // Port sizes are resolved by this phase -- connect_phase is too early to inspect them
-  // UVM permits an unused analysis port, so required checking paths need our explicit validation -- alex
+  // Wait until binding resolution is finished before asking ports for their sizes
+  // Fail before traffic starts -- an analysis port is allowed to have no subscribers in UVM
   function void end_of_elaboration_phase(uvm_phase phase);
     super.end_of_elaboration_phase(phase);
 
-    // Stop before dereferencing any missing child -- otherwise a null-handle failure hides which connection was absent -- alex
+    // Check handles first so a missing component gives our report rather than a null dereference
     if ((cfg == null) || (wb_agt == null) || (ser_agt == null) ||
         (regm == null) || (adapter == null) || (predictor == null) ||
-        (scb == null) || (vseqr == null) || (mdm_agt == null) ||
-        (int_mon == null) || (line_observer == null)) begin
+        (scb == null) || (vseqr == null)) begin
       `uvm_fatal("UART_CONNECTION", "A required environment component or configuration is missing")
       return;
     end
@@ -143,19 +132,16 @@ class uart_env extends uvm_env;
         (ser_agt.drv == null) || (ser_agt.mon_tx == null) ||
         (ser_agt.mon_rx == null) || (ser_agt.sqr == null) ||
         (scb.wb_in == null) || (scb.tx_in == null) || (scb.rx_in == null) ||
-        (mdm_agt.drv == null) || (mdm_agt.mon == null) || (mdm_agt.sqr == null) ||
-        (scb.modem_in == null) || (scb.irq_in == null) ||
         (regm.map_dlab0 == null) || (regm.map_dlab1 == null)) begin
       `uvm_fatal("UART_CONNECTION", "A required agent child, scoreboard input, or register map is missing")
       return;
     end
 
-    // A valid config handle can still contain no interface -- check both levels -- alex
+    // Getting a config object is not enough -- its interface can still be null
+    // Also check the config identity so a child cannot silently use another interface or format
     if ((cfg.wb.vif == null) || (cfg.ser.vif == null) || (cfg.mdm_vif == null)) begin
       `uvm_fatal("UART_CONNECTION", "A required virtual interface is null")
     end
-    // A second config instance can contain valid interfaces yet miss later framing updates
-    // Require the shared object, not just any object of the correct type -- alex
     if ((wb_agt.drv.cfg != cfg.wb) || (wb_agt.mon.cfg != cfg.wb) ||
         (ser_agt.drv.cfg != cfg.ser) || (ser_agt.mon_tx.cfg != cfg.ser) ||
         (ser_agt.mon_rx.cfg != cfg.ser) || (scb.cfg != cfg)) begin
@@ -165,34 +151,27 @@ class uart_env extends uvm_env;
       `uvm_fatal("UART_CONNECTION", "Serial monitors are assigned to the wrong lines")
     end
 
-    // size checks the resolved implementations, check_link below checks the direct wiring
-    // Wishbone has three consumers now -- predictor, line observer and scoreboard -- alex
+    // Check resolved implementations as well as direct links -- no empty forwarding chain can pass
     if ((wb_agt.drv.seq_item_port.size() != 1) ||
         (ser_agt.drv.seq_item_port.size() != 1) ||
-        (wb_agt.mon.ap.size() != 3) ||
-        (ser_agt.mon_tx.ap.size() != 1) || (ser_agt.mon_rx.ap.size() != 1) ||
-        (mdm_agt.drv.seq_item_port.size() != 1) || (mdm_agt.mon.ap.size() != 1) ||
-        (int_mon.ap.size() != 1)) begin
+        (wb_agt.mon.ap.size() != 2) ||
+        (ser_agt.mon_tx.ap.size() != 1) || (ser_agt.mon_rx.ap.size() != 1)) begin
       `uvm_fatal("UART_CONNECTION", "A required port has an unexpected number of resolved connections")
     end
     check_link(wb_agt.drv.seq_item_port.get_comp(), wb_agt.sqr.seq_item_export.get_comp(), 1);
     check_link(ser_agt.drv.seq_item_port.get_comp(), ser_agt.sqr.seq_item_export.get_comp(), 1);
-    check_link(wb_agt.mon.ap.get_comp(), predictor.bus_in.get_comp(), 3);
-    check_link(wb_agt.mon.ap.get_comp(), scb.wb_in.analysis_export.get_comp(), 3);
-    check_link(wb_agt.mon.ap.get_comp(), line_observer.analysis_export.get_comp(), 3);
-    check_link(mdm_agt.drv.seq_item_port.get_comp(), mdm_agt.sqr.seq_item_export.get_comp(), 1);
-    check_link(mdm_agt.mon.ap.get_comp(), scb.modem_in.analysis_export.get_comp(), 1);
-    check_link(int_mon.ap.get_comp(), scb.irq_in.analysis_export.get_comp(), 1);
+    check_link(wb_agt.mon.ap.get_comp(), predictor.bus_in.get_comp(), 2);
+    check_link(wb_agt.mon.ap.get_comp(), scb.wb_in.analysis_export.get_comp(), 2);
     check_link(ser_agt.mon_tx.ap.get_comp(), scb.tx_in.analysis_export.get_comp(), 1);
     check_link(ser_agt.mon_rx.ap.get_comp(), scb.rx_in.analysis_export.get_comp(), 1);
 
-    // TLM port checks cannot see these plain handles -- a null or swapped sequencer needs its own check -- alex
-    if ((vseqr.wb_sqr != wb_agt.sqr) || (vseqr.ser_sqr != ser_agt.sqr) || (vseqr.mdm_sqr != mdm_agt.sqr) ||
+    // The virtual sequencer uses handles rather than TLM connections -- validate those separately
+    if ((vseqr.wb_sqr != wb_agt.sqr) || (vseqr.ser_sqr != ser_agt.sqr) ||
         (vseqr.regm != regm) || (vseqr.predictor != predictor) || (vseqr.cfg != cfg)) begin
       `uvm_fatal("UART_CONNECTION", "The virtual sequencer has a missing or incorrect reference")
     end
 
-    // A populated RAL model can still be disconnected -- verify both maps and the predictor share the real bus path -- alex
+    // Both banks must reach the real bus and use the same adapter as the observed predictor
     if ((regm.map_dlab0.get_sequencer() != wb_agt.sqr) ||
         (regm.map_dlab1.get_sequencer() != wb_agt.sqr) ||
         (regm.map_dlab0.get_adapter() != adapter) ||

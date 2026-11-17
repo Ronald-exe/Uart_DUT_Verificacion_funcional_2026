@@ -26,16 +26,6 @@ class wb_item extends uvm_sequence_item;
   rand int unsigned delay;      // ciclos libres antes de empezar el acceso
   rand int unsigned stb_delay;  // ciclos entre subir cyc y subir stb
 
-
-  // Track completion separately from data so reset cannot masquerade as a successful read -- alex
-  bit completed;
-  bit aborted;
-  bit timed_out;
-  bit unknown_seen;
-  bit control_unknown;
-  bit data_unknown;
-  time observed_at;
-
   // 5) Constructor: siempre con un nombre por defecto.
   function new(string name = "wb_item");
     super.new(name);

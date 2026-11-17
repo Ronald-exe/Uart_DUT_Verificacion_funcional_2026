@@ -8,10 +8,8 @@
 +incdir+../tb/ser_agent
 +incdir+../tb/ral
 +incdir+../tb/uart_env
-// Add the modem package to the integration without changing the original interfaces -- alex
-+incdir+../tb/modem_agent
 
-// ---- RTL del DUT ----
+// ---- RTL del DUT (no modificar) ----
 ../rtl/raminfr.v
 ../rtl/uart_sync_flops.v
 ../rtl/uart_tfifo.v
@@ -29,12 +27,10 @@
 ../tb/modem_if.sv
 ../tb/uart_wb_sva.sv
 
-// ---- Ambiente UVM ----
+// ---- Ambiente UVM (agreguen aquí sus paquetes, antes de tb_top) ----
 ../tb/wb_agent/wb_pkg.sv
 ../tb/ser_agent/ser_pkg.sv
 ../tb/ral/ral_pkg.sv
-// Define modem types before the environment consumes them -- alex
-../tb/modem_agent/modem_pkg.sv
 ../tb/uart_env/uart_env_pkg.sv
 ../tb/uart_hello_pkg.sv
 

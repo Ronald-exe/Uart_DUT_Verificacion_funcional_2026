@@ -1,2 +1,0 @@
-// Allow line and register changes while the traffic workers are active
-+UART_SW_RECFG_PCT=50

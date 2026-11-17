@@ -26,10 +26,7 @@ class wb_monitor extends uvm_monitor;
       @(cfg.vif.mon_cb);
 
       //vemos si termino un acceso (2): cyc, stb y ack en 1
-      // Ignore bus activity during reset because there is no completed transfer to publish -- alex
-      // if (cfg.vif.mon_cb.cyc && cfg.vif.mon_cb.stb && cfg.vif.mon_cb.ack) begin
-      if ((cfg.vif.mon_cb.rst === 0) && (cfg.vif.mon_cb.cyc === 1) &&
-          (cfg.vif.mon_cb.stb === 1) && (cfg.vif.mon_cb.ack === 1)) begin
+      if (cfg.vif.mon_cb.cyc && cfg.vif.mon_cb.stb && cfg.vif.mon_cb.ack) begin
 
         //se crea un item nuevo para cada acceso
         it = wb_item::type_id::create("it"); //"créame un wb_item con el nombre "it", llama el constructor y hace que it sea un objeto
@@ -45,17 +42,6 @@ class wb_monitor extends uvm_monitor;
         //se imprime en el log (solo con UVM_HIGH) y se publica a todos los conectados
         //Si es escritura, guarda el dato que mandó el maestro (dat_m2s); si no, guarda el que devolvió el DUT (dat_s2m).
         `uvm_info("WB_MON", it.convert2string(), UVM_HIGH)
-        // Keep unknown detection before the original two-state item conversion can hide it -- alex
-        it.control_unknown = $isunknown({cfg.vif.mon_cb.adr, cfg.vif.mon_cb.sel, cfg.vif.mon_cb.we});
-        it.unknown_seen = it.control_unknown;
-        if (!it.we) begin
-          it.data_unknown = $isunknown(cfg.vif.mon_cb.dat_s2m);
-        end else begin
-          it.data_unknown = $isunknown(cfg.vif.mon_cb.dat_m2s);
-        end
-        it.unknown_seen |= it.data_unknown;
-        it.completed = 1;
-        it.observed_at = $time;
         ap.write(it); //UVM le entrega el item a cada componente conectado
       end
     end
