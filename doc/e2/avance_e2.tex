@@ -1,0 +1,179 @@
+\documentclass[11pt,a4paper]{article}
+
+% ------------------------------------------------------------------
+% Paquetes (mismo estilo que el plan de verificacion)
+% ------------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[scaled=0.95]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\usepackage[spanish,es-noshorthands,es-tabla]{babel}
+\usepackage[a4paper,margin=2cm]{geometry}
+\usepackage{microtype}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{titlesec}
+\usepackage{url}
+\usepackage{enumitem}
+
+\pagestyle{plain}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.25cm}
+
+\definecolor{cabecera}{HTML}{E6E6E6}
+\definecolor{borde}{HTML}{808080}
+\arrayrulecolor{borde}
+\renewcommand{\arraystretch}{1.25}
+\setlength{\tabcolsep}{0.12cm}
+
+\titleformat{\section}{\fontsize{13}{16}\selectfont\bfseries}{\thesection.}{0.35em}{}
+\titlespacing*{\section}{0pt}{0.35cm}{0.1cm}
+
+\newcommand{\cab}{\rowcolor{cabecera}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\DeclareUrlCommand\cod{\urlstyle{same}}
+\setlist{itemsep=0pt,topsep=2pt}
+
+\begin{document}
+
+{\fontsize{16}{20}\selectfont\bfseries Avance E2: verificación del UART 16550 con UVM\par}
+\vspace{0.15cm}
+\begin{tabular}{@{}ll@{}}
+\textbf{Integrantes:} & Ronald Duarte Barrantes, Alexander Sotela Alvarado \\
+\textbf{Curso:} & Verificación funcional de circuitos integrados \\
+\textbf{Repositorio:} & \cod{github.com/Ronald-exe/Uart_DUT_Verificacion_funcional_2026} \\
+\textbf{Etiqueta Git:} & \cod{entrega2} \hspace{0.6cm} \textbf{Fecha:} 17 de noviembre de 2026 \\
+\end{tabular}
+
+% ==================================================================
+\section{Estado del ambiente}
+% ==================================================================
+Para esta entrega se construyó el ambiente UVM base sobre el DUT de OpenCores sin modificar el RTL, siguiendo la arquitectura de la sección 9 del plan. En la Tabla~\ref{tab:estado} se presenta el estado de cada componente, quién fue el responsable principal y si ya funciona en la regresión de E2.
+
+\begin{table}[h]
+\centering
+\caption{Estado de los componentes del ambiente.}
+\label{tab:estado}
+\begin{tabular}{|L{4.3cm}|L{2.4cm}|L{2.1cm}|L{7.6cm}|}
+\hline
+\cab \textbf{Componente} & \textbf{Estado} & \textbf{Responsable} & \textbf{Comentario} \\ \hline
+Agente Wishbone (\cod{wb_agent}) & Completo & Ronald & Driver con retardos aleatorios entre accesos y en \cod{stb}, monitor con \cod{uvm_analysis_port} y manejo de \cod{wb_sel_i} en 32 bits \\ \hline
+Agente serie (\cod{ser_agent}) & Completo sin errores & Ronald & Driver hacia \cod{srx_pad_i} con cualquier formato de línea, monitores de \cod{stx_pad_o} y \cod{srx_pad_i} que leen a la mitad de cada bit \\ \hline
+RAL (\cod{uart_reg_block} y adaptador) & Completo & Ronald & 12 registros, dos mapas por DLAB, puerta trasera a \cod{tb_top.dut.regs} y adaptador con la conversión a \cod{adr}, \cod{sel} y carril \\ \hline
+Configuración y \cod{parse_plusargs()} & Completo & Alexander & Lectura en un solo lugar, validación de rangos e impresión de cada knob con su origen \\ \hline
+Ambiente, predictor y secuenciador virtual & Completo & Alexander & Predictor explícito con \cod{set_auto_predict(0)} y revisión de conexiones en \cod{end_of_elaboration_phase} \\ \hline
+Secuencias y prueba base & Completo & Alexander & Prueba del RAL, programación del UART y tráfico TX/RX en paralelo con servicio por sondeo \\ \hline
+Scoreboard TX y RX & Completo & Alexander & Compara THR contra \cod{stx_pad_o} y \cod{srx_pad_i} contra RBR, en orden, y revisa los totales al final \\ \hline
+Inyección de errores, módem e interrupciones & Pendiente & Ambos & Para E3 (sección~\ref{sec:plan}) \\ \hline
+Modelo de LSR, IIR, MSR e \cod{int_o} & Pendiente & Ronald & Para E3 \\ \hline
+Aserciones y covergroups del plan & Pendiente & Ambos & Para E3, solo está la aserción de ejemplo del profesor \\ \hline
+\end{tabular}
+\end{table}
+
+% ==================================================================
+\section{Cumplimiento de los puntos de E2}
+% ==================================================================
+En la Tabla~\ref{tab:e2} se resume cada punto que pide el enunciado para esta entrega junto con la evidencia que lo respalda.
+
+\begin{table}[h]
+\centering
+\caption{Puntos de E2 y su evidencia.}
+\label{tab:e2}
+\begin{tabular}{|L{6.0cm}|L{1.6cm}|L{8.8cm}|}
+\hline
+\cab \textbf{Punto del enunciado} & \textbf{Estado} & \textbf{Evidencia} \\ \hline
+Ambiente compilando y corriendo la prueba base con al menos 20 semillas sin errores falsos & Cumplido & 20 de 20 semillas con \cod{UVM_ERROR = 0} y \cod{UVM_FATAL = 0} (Tabla~\ref{tab:regresion}) \\ \hline
+Agentes Wishbone y serie completos & Cumplido & Tabla~\ref{tab:estado}; la inyección de errores del agente serie queda para E3 \\ \hline
+RAL con \cod{uvm_reg_hw_reset_seq} por puerta delantera y trasera & Cumplido & Mensajes \cod{UART_RAL_FRONTDOOR} y \cod{UART_RAL_BACKDOOR} sin errores en LCR, IER y SCR \\ \hline
+Scoreboard de TX y RX funcionando & Cumplido & 2677 caracteres TX y 2315 RX comparados sin diferencias \\ \hline
+Primer reporte de cobertura de URG & Cumplido & Tabla~\ref{tab:cobertura}, 20 semillas fusionadas \\ \hline
+\end{tabular}
+\end{table}
+
+% ==================================================================
+\section{Resultados de la regresión}
+% ==================================================================
+La regresión se corrió con la prueba única \cod{uart_base_test} y el perfil \cod{sim/plusargs.args}, cambiando solo la semilla con \cod{make run TEST=uart_base_test SEED=N}. En la Tabla~\ref{tab:regresion} se presentan los resultados de las 20 semillas.
+
+\begin{table}[h]
+\centering
+\caption{Regresión de la prueba base con 20 semillas.}
+\label{tab:regresion}
+\begin{tabular}{|L{9.5cm}|L{5.0cm}|}
+\hline
+\cab \textbf{Indicador} & \textbf{Resultado} \\ \hline
+Semillas corridas & 20 \\ \hline
+Semillas con \cod{UVM_ERROR = 0} y \cod{UVM_FATAL = 0} & \textbf{20 de 20} \\ \hline
+Caracteres TX comparados (total) & \textbf{2677} (de 3 a 244 por semilla) \\ \hline
+Caracteres RX comparados (total) & \textbf{2315} (de 3 a 245 por semilla) \\ \hline
+Lecturas de RBR con la FIFO vacía & 0 \\ \hline
+\end{tabular}
+\end{table}
+
+En cada log aparecen 4 \cod{UVM_WARNING} con el identificador \cod{CBPREG}, esto se debe a que IIR y FCR están en los dos mapas del RAL y UVM les registra dos veces el callback de solo lectura o solo escritura, por lo que no se consideran errores falsos.
+
+En la Tabla~\ref{tab:cobertura} se presenta el primer reporte de cobertura de código, medido con URG sobre la jerarquía del DUT y fusionando las 20 semillas.
+
+\begin{table}[h]
+\centering
+\caption{Primer reporte de cobertura de código (URG).}
+\label{tab:cobertura}
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\cab \textbf{Total} & \textbf{Línea} & \textbf{Rama} & \textbf{Condición} & \textbf{Toggle} & \textbf{FSM} & \textbf{Aserciones} \\ \hline
+78.81\,\% & \textbf{94.09\,\%} & 84.66\,\% & 73.26\,\% & 61.90\,\% & 58.97\,\% & 100.00\,\% \\ \hline
+\end{tabular}
+\end{table}
+
+Notamos que la cobertura de línea ya está cerca de la meta del 95\,\%, pero toggle y FSM están muy por debajo, esto se debe a que el perfil de E2 solo genera tráfico normal: no hay errores de paridad, trama o break, no se usa loopback, las entradas de módem no cambian, no se habilitan interrupciones y cada semilla mantiene un solo formato de línea con DL entre 1 y 8, por lo que varias partes del receptor, de la lógica de interrupciones y del módem nunca se activan. El 100\,\% de aserciones corresponde solo a la aserción de ejemplo \cod{uart_wb_sva}, las del plan se agregan en E3.
+
+% ==================================================================
+\section{Problemas encontrados}
+% ==================================================================
+\begin{itemize}
+\item \textbf{La prueba base todavía no corre con todos los valores por defecto del plan.} Los knobs de estímulos que el scoreboard aún no modela (errores de línea, loopback, interrupciones, reset y reconfiguración con tráfico) terminan con \cod{UVM_FATAL} si se activan, por eso la regresión de E2 usa el perfil \cod{plusargs.args} que los deja en 0. Se habilitan en E3 conforme se agreguen al modelo.
+\item \textbf{La secuencia \cod{uvm_reg_hw_reset_seq} no aplica un reset real.} Se extendió como \cod{uart_hw_reset_seq} para subir \cod{wb_rst_i} durante 5 ciclos, de lo contrario la prueba solo leía los registros sin comprobar el reset.
+\item \textbf{Registros con dirección compartida por DLAB.} Las secuencias integradas de UVM no ponen DLAB = 1, por eso la prueba de reset se limita a LCR, IER y SCR, y al programar DLL y DLM la secuencia cambia el mapa del predictor a \cod{map_dlab1} y lo regresa a \cod{map_dlab0}.
+\item \textbf{Integración.} El 15 y 16 de noviembre se probó una versión extendida del ambiente (inyección de errores, módem y un modelo de referencia completo), pero se decidió volver a la versión verificada del 14 de noviembre para no arriesgar la entrega, la versión extendida se conserva en una rama aparte para retomarla en E3. En esa versión se encontró que VCS recorta a 32 bits el contador de un \cod{repeat}, lo cual se debe tomar en cuenta en los retardos largos.
+\item \textbf{Errores del DUT.} Con el tráfico de E2 todavía no se reproducen los BUG-01 a BUG-05 del plan, porque necesitan estímulos de módem, loopback y overrun que se agregan en E3.
+\end{itemize}
+
+% ==================================================================
+\section{Plan para las semanas restantes}
+\label{sec:plan}
+% ==================================================================
+En la Tabla~\ref{tab:plan} se presenta el plan hasta la entrega final, manteniendo la distribución de la sección 17 del plan de verificación y dejando la semana 16 libre de trabajo nuevo por el examen de otro curso.
+
+\begin{table}[h]
+\centering
+\caption{Plan de trabajo para E3.}
+\label{tab:plan}
+\begin{tabular}{|L{2.2cm}|L{7.3cm}|L{7.0cm}|}
+\hline
+\cab \textbf{Semana} & \textbf{Ronald} & \textbf{Alexander} \\ \hline
+S5 & Modelo de LSR, IIR e \cod{int_o}; servicio por interrupción & Inyección de errores en el agente serie; agente de módem y monitor de \cod{int_o} \\ \hline
+S6 & Aserciones Wishbone, módem y loopback; covergroups de registros & Scoreboard de FIFOs, overrun y MSR; aserciones serie; covergroups de línea \\ \hline
+S7 & Reset y reconfiguración con tráfico; predictor según DLAB & Activar los valores por defecto del plan; regresión de 200 semillas y curva de línea base \\ \hline
+Hasta la S15 & \multicolumn{2}{L{14.3cm}|}{Análisis de huecos (categorías a, b, c y d), archivos \cod{.args} de los casos de esquina, exclusiones \cod{.el} y reproducción de los BUG} \\ \hline
+S17 y S18 & \multicolumn{2}{L{14.3cm}|}{Informe final, presentación y preparación de la entrevista individual} \\ \hline
+\end{tabular}
+\end{table}
+
+% ==================================================================
+\section{Balance del trabajo}
+% ==================================================================
+Ronald escribió los agentes Wishbone y serie y el modelo RAL con su adaptador (commits del 12 al 14 de noviembre), mientras que Alexander escribió la configuración con los plusargs, el ambiente, las secuencias, el scoreboard y la prueba base, además de la versión extendida que se dejó para E3. Para las siguientes semanas proponemos que cada uno revise el código del otro antes de integrarlo, que los cambios sobre un archivo del otro se conversen primero y que se mantenga el mismo estilo de comentarios, ya que los dos debemos poder explicar todo el ambiente en la entrevista individual.
+
+% ==================================================================
+\section{Conclusiones}
+% ==================================================================
+\begin{itemize}
+\item El ambiente compila y la prueba base pasa 20 de 20 semillas sin errores falsos.
+\item El RAL pasa la prueba de reset por puerta delantera y trasera en LCR, IER y SCR.
+\item El scoreboard comparó 2677 caracteres TX y 2315 RX sin diferencias.
+\item La cobertura de línea ya es de 94.09\,\%, pero toggle y FSM están bajos porque falta el estímulo de errores, módem e interrupciones.
+\item Lo más importante para E3 es el modelo de LSR, IIR e \cod{int_o} y habilitar los valores por defecto del plan.
+\end{itemize}
+
+\end{document}

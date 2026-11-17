@@ -12,3 +12,6 @@ sim/*.fsdb
 sim/verdiLog/
 sim/novas*
 sim/.fsm.sch.verilog.xml
+
+# Archivos de bloqueo de LibreOffice
+.~lock*

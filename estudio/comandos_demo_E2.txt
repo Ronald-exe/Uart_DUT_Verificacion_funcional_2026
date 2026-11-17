@@ -1,0 +1,63 @@
+COMANDOS PARA LA DEMO DE E2
+===========================
+
+0. ENTRAR Y PREPARAR
+--------------------
+cd <carpeta del repo>/Uart_DUT_Verificacion_funcional_2026
+git pull
+cd sim
+
+
+1. COMPILAR (una sola vez)
+--------------------------
+make comp TEST=uart_base_test
+
+   Buscar al final: 0 error(s), 0 warning(s)
+
+
+2. UNA SEMILLA (para mostrar el flujo)
+--------------------------------------
+make run TEST=uart_base_test SEED=1 ARGS="-f plusargs.args"
+
+   Que ensenar en la salida:
+   - [UART_CFG] ... (default) / (plusarg)  -> cada knob con su origen
+   - [UART_RAL_FRONTDOOR] y [UART_RAL_BACKDOOR] -> prueba de reset del RAL
+   - [UART_LINE] LCR=.. DL=..               -> formato elegido por la semilla
+   - [SCB_SUMMARY] TX comparados=.. RX comparados=..
+   - [UART_E2_PASS] y UVM_ERROR : 0, UVM_FATAL : 0
+
+
+3. LAS 20 SEMILLAS (correrlas ANTES de que llegue el profe)
+-----------------------------------------------------------
+for s in $(seq 1 20); do make run TEST=uart_base_test SEED=$s ARGS="-f plusargs.args"; done
+
+
+4. RESUMEN DE LAS 20
+--------------------
+grep -l "UVM_ERROR :    0" run_uart_base_test_*.log | wc -l      (debe dar 20)
+grep -H "UVM_FATAL :" run_uart_base_test_*.log
+grep -h "\[SCB_SUMMARY\] TX" run_uart_base_test_*.log
+
+
+5. COBERTURA (URG)
+------------------
+make cov
+head -25 cov_report/dashboard.txt
+firefox cov_report/dashboard.html &
+
+
+6. SI PIDEN CAMBIAR UN KNOB EN VIVO
+-----------------------------------
+make run TEST=uart_base_test SEED=1 ARGS="-f plusargs.args +UART_SW_TX_BURST_MAX=5"
+grep "UART_SW_TX_BURST_MAX" run_uart_base_test_1.log       (sale como (plusarg))
+
+   Ver el perfil de knobs de E2:
+grep -v "^//" plusargs.args | grep -v "^$"
+
+
+RESULTADOS QUE YA TENEMOS (para decirlos de memoria)
+----------------------------------------------------
+- 20 de 20 semillas con UVM_ERROR = 0 y UVM_FATAL = 0
+- TX comparados: 2677 en total | RX comparados: 2315 en total
+- Cobertura: Linea 94.09 % | Rama 84.66 % | Condicion 73.26 % | Toggle 61.90 % | FSM 58.97 % | Total 78.81 %
+- Los 4 UVM_WARNING (CBPREG) son porque IIR y FCR estan en los dos mapas del RAL, no son errores
