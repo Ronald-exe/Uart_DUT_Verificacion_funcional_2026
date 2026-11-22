@@ -1,34 +1,42 @@
-// Keep one bus access in this helper so TX generation and RX service use the same packing and timeout
-// The original driver still handles the pins
+//Secuencia de UN acceso al bus Wishbone (una lectura o una escritura a un registro)
+//La usan el trafico TX y el servicio RX, asi todos arman el acceso igual y con el mismo tiempo maximo
+//el driver Wishbone sigue siendo el que mueve los cables
+//uvm_sequence #(wb_item) significa que esta secuencia manda items de tipo wb_item
 class uart_wb_seq extends uvm_sequence #(wb_item);
-  `uvm_object_utils(uart_wb_seq)
-  uart_env_cfg cfg;
-  bit [4:0] reg_index;
-  bit write_access;
-  bit [7:0] write_data;
-  bit [7:0] read_data;
 
+  //Registramos en la fabrica
+  `uvm_object_utils(uart_wb_seq)
+
+  uart_env_cfg cfg;     //configuracion, de aqui salen los retardos y el tiempo maximo
+  bit [4:0] reg_index;  //numero del registro (0 a 7)
+  bit write_access;     //1 = escritura, 0 = lectura
+  bit [7:0] write_data; //byte que se escribe
+  bit [7:0] read_data;  //byte que se leyo, lo llena la secuencia al terminar
+
+  //Se crea el constructor, las secuencias son objetos y no llevan parent
   function new(string name = "uart_wb_seq");
     super.new(name);
   endfunction
 
+  //body es lo que hace la secuencia cuando se arranca con start
   task body();
-    wb_item it;
-    int unsigned lane;
+    wb_item it;        //handle al item que vamos a mandar
+    int unsigned lane; //carril del bus donde va el byte
     it = wb_item::type_id::create("access");
-    start_item(it);
-    // Pack bytes the same way as the RAL adapter so raw traffic and register accesses agree
-    // Register zero uses the top byte lane -- the aligned bus address identifies the group
+    start_item(it); //pide turno al secuenciador, espera hasta que el driver este libre
+    //Armamos el acceso igual que el adaptador del RAL, asi los accesos directos y los del RAL coinciden
+    //el registro 0 va en el carril de arriba [31:24] y la direccion alineada dice el grupo (piso y puerta)
     lane = 3 - reg_index[1:0];
     it.adr = {reg_index[4:2], 2'b00};
     it.sel = 4'b1000 >> reg_index[1:0];
     it.we = write_access;
     it.data = '0;
     it.data[8 * lane +: 8] = write_data;
-    it.delay = $urandom_range(cfg.wb.delay_max, 0);
-    it.stb_delay = $urandom_range(cfg.wb.stb_delay_max, 0);
-    // The driver can wait forever if ACK never arrives so put a timeout beside finish_item
-    // Once either branch finishes cancel the other -- no leftover timeout should kill a later access
+    it.delay = $urandom_range(cfg.wb.delay_max, 0);         //retardo aleatorio entre accesos, de 0 a delay_max
+    it.stb_delay = $urandom_range(cfg.wb.stb_delay_max, 0); //retardo aleatorio entre cyc y stb
+    //finish_item le entrega el item al driver y espera a que termine
+    //si ack nunca llega el driver esperaria para siempre, por eso ponemos un tiempo maximo en paralelo
+    //fork y join_any: sigue con el primero que termine, y disable fork mata al otro para que no afecte otro acceso
     fork
       begin
         finish_item(it);
@@ -39,17 +47,23 @@ class uart_wb_seq extends uvm_sequence #(wb_item);
       end
     join_any
     disable fork;
-    read_data = it.data[8 * lane +: 8];
+    read_data = it.data[8 * lane +: 8]; //en una lectura el driver dejo el dato en el mismo item, sacamos el byte de su carril
   endtask
+
 endclass : uart_wb_seq
 
-// Generate characters here and leave bit timing to the existing serial driver
-// That keeps the traffic constraints separate from how a UART frame is driven on SRX
+//Secuencia de trafico RX: genera los caracteres que entran al DUT por srx
+//aqui solo se eligen los caracteres, como se mandan bit por bit lo hace el driver serie
+//asi las restricciones del trafico quedan separadas de como se arma la trama
 class uart_rx_seq extends uvm_sequence #(ser_item);
-  `uvm_object_utils(uart_rx_seq)
-  uart_env_cfg cfg;
-  int unsigned count;
 
+  //Registramos en la fabrica
+  `uvm_object_utils(uart_rx_seq)
+
+  uart_env_cfg cfg;   //configuracion, de aqui salen los rangos
+  int unsigned count; //cuantos caracteres mandar
+
+  //Se crea el constructor
   function new(string name = "uart_rx_seq");
     super.new(name);
   endfunction
@@ -59,36 +73,45 @@ class uart_rx_seq extends uvm_sequence #(ser_item);
     int unsigned low;
     int unsigned high;
     int unsigned gap_limit;
-    // Copy the config limits locally so the inline constraint clearly refers to these bounds
+    //Copiamos los limites de la configuracion a variables locales, asi en la restriccion queda claro de donde salen
     low = cfg.ser.data_min;
     high = cfg.ser.data_max;
     gap_limit = cfg.ser.gap_max;
     repeat (count) begin
       it = ser_item::type_id::create("rx_character");
       start_item(it);
+      //randomize() with {...} sortea el item con restricciones extra
+      //local:: indica que low, high y gap_limit son de esta secuencia y no campos del item
       if (!it.randomize() with {
         data inside {[local::low:local::high]};
         gap inside {[0:local::gap_limit]};
       }) begin
         `uvm_fatal("UART_RANDOMIZE", "No se pudo aleatorizar el caracter RX")
       end
-      finish_item(it);
+      finish_item(it); //se lo entrega al driver serie y espera a que lo mande
     end
   endtask
+
 endclass : uart_rx_seq
 
-// Use the standard RAL reset sequence but supply the hardware reset it cannot know how to drive
-// Resetting the mirror alone would not test whether the DUT registers actually reset
+//Prueba de reset del RAL: usamos la secuencia de UVM uvm_reg_hw_reset_seq, que lee cada registro y lo compara con su valor de reset
+//el problema es que UVM no sabe como hacer un reset en nuestro DUT, por eso heredamos y escribimos reset_blk
+//si solo se reiniciara el espejo nunca se probaria que los registros del DUT de verdad vuelven a su valor de reset
 class uart_hw_reset_seq extends uvm_reg_hw_reset_seq;
-  `uvm_object_utils(uart_hw_reset_seq)
-  virtual wb_if vif;
 
+  //Registramos en la fabrica
+  `uvm_object_utils(uart_hw_reset_seq)
+
+  virtual wb_if vif; //interfaz Wishbone, de aqui manejamos rst
+
+  //Se crea el constructor
   function new(string name = "uart_hw_reset_seq");
     super.new(name);
   endfunction
 
-  // Change reset on falling edges to keep it away from bus sampling on rising edges
-  // Only do this before traffic because the existing agents do not recover an interrupted frame
+  //reset_blk es la funcion que UVM llama para aplicar el reset, aqui subimos rst 5 ciclos
+  //se cambia en el flanco de bajada para no chocar con el muestreo del bus en el flanco de subida
+  //solo se usa antes del trafico porque los agentes no se recuperan de un caracter cortado a la mitad
   virtual task reset_blk(uvm_reg_block blk);
     if (vif == null)
       `uvm_fatal("UART_RESET_VIF", "Reset fisico sin wb_if")
@@ -98,33 +121,43 @@ class uart_hw_reset_seq extends uvm_reg_hw_reset_seq;
     vif.rst = 0;
     repeat (3) @(vif.drv_cb);
   endtask
+
 endclass : uart_hw_reset_seq
 
-// Coordinate the agents here because neither individual agent should own the full test flow
-// Use the same sequence for different ranges -- the plusargs decide what traffic is possible
+//Secuencia virtual principal: coordina a los agentes, ninguno de ellos sabe el flujo completo de la prueba
+//es la misma secuencia para todos los casos, los plusargs deciden que trafico es posible
+//Corre en el secuenciador virtual (uart_vsequencer)
 class uart_main_vseq extends uvm_sequence;
-  `uvm_object_utils(uart_main_vseq)
-  `uvm_declare_p_sequencer(uart_vsequencer)
-  uart_env_cfg cfg;
-  bit rx_done;
-  bit [7:0] active_lcr;
-  bit [15:0] active_dl;
-  longint unsigned planned_tx;
-  longint unsigned planned_rx;
 
+  //Registramos en la fabrica
+  `uvm_object_utils(uart_main_vseq)
+  //uvm_declare_p_sequencer crea p_sequencer, un handle al secuenciador virtual donde corre esta secuencia
+  //con el sacamos los secuenciadores de los agentes, el RAL, el predictor y la configuracion
+  `uvm_declare_p_sequencer(uart_vsequencer)
+
+  uart_env_cfg cfg;             //configuracion
+  bit rx_done;                  //1 cuando ya se mandaron todos los caracteres RX de la iteracion
+  bit [7:0] active_lcr;         //formato que se escribio en LCR
+  bit [15:0] active_dl;         //divisor que se escribio en DLL y DLM
+  longint unsigned planned_tx;  //total de escrituras TX planeadas, se le pasa al scoreboard al final
+  longint unsigned planned_rx;  //total de caracteres RX planeados
+
+  //Se crea el constructor
   function new(string name = "uart_main_vseq");
     super.new(name);
   endfunction
 
-  // Compute character time from the active format so waits follow changes in data width and baud
-  // Use the agent helper for stops because 5-bit mode can have one and a half stop bits
+  //Calcula cuantos ciclos dura un caracter completo con el formato actual: inicio + datos + paridad + parada
+  //asi las esperas se ajustan si cambia el largo o la velocidad
+  //para la parada se usa la funcion del agente porque con 5 bits puede ser 1.5 bits
   function int unsigned char_cycles();
     return (1 + cfg.ser.n_bits() + int'(cfg.ser.pen)) * cfg.ser.bit_cycles() +
            cfg.ser.stop_cycles();
   endfunction
 
-  // Leave locking to the caller so several transfers can stay inside one DLAB-critical section
-  // Wait after the access because the unchanged driver needs its outputs to settle before reuse
+  //Hace UN acceso al bus con uart_wb_seq, sin tomar el candado (eso lo hace quien la llama)
+  //asi se pueden hacer varios accesos seguidos dentro de la misma zona con DLAB = 1
+  //al final espera 2 ciclos porque el driver necesita que sus salidas se acomoden antes del siguiente acceso
   task transfer(bit wr, bit [4:0] index, bit [7:0] value,
                 output bit [7:0] result);
     uart_wb_seq seq;
@@ -133,26 +166,26 @@ class uart_main_vseq extends uvm_sequence;
     seq.reg_index = index;
     seq.write_access = wr;
     seq.write_data = value;
-    seq.start(p_sequencer.wb_sqr);
+    seq.start(p_sequencer.wb_sqr); //corre la secuencia en el secuenciador del agente Wishbone
     result = seq.read_data;
     repeat (2) @(cfg.wb.vif.drv_cb);
   endtask
 
-  // Take the bus token around the whole access including recovery cycles
-  // Otherwise TX and RX service could start their next accesses before the bus is ready
+  //Igual que transfer pero tomando el candado del bus (bus_lock, un semaforo)
+  //TX, RX y el servicio corren en paralelo y comparten el bus, el candado hace que uno espere a que el otro termine
   task access(bit wr, bit [4:0] index, bit [7:0] value,
               output bit [7:0] result);
-    cfg.bus_lock.get(1);
+    cfg.bus_lock.get(1); //toma el candado, si otro lo tiene espera
     transfer(wr, index, value, result);
-    cfg.bus_lock.put(1);
+    cfg.bus_lock.put(1); //lo devuelve
   endtask
 
-  // Write something different first -- reading reset values from an untouched DUT would prove very little
-  // Read it back so we know the preparation really reached the hardware
+  //Antes del reset escribimos un valor distinto al de reset y lo leemos de vuelta
+  //si el DUT ya estuviera en reset, leer el valor de reset no probaria nada
   task prepare_reset_register(uvm_reg reg_handle, uvm_reg_data_t value);
-    uvm_status_e status;
-    uvm_reg_data_t actual;
-    reg_handle.write(status, value, UVM_FRONTDOOR, p_sequencer.regm.map_dlab0);
+    uvm_status_e status;    //si el acceso del RAL salio bien
+    uvm_reg_data_t actual;  //valor que se leyo
+    reg_handle.write(status, value, UVM_FRONTDOOR, p_sequencer.regm.map_dlab0); //write del RAL por la puerta delantera
     if (status != UVM_IS_OK)
       `uvm_error("UART_RAL_PREPARE", "Fallo al preparar el registro antes del reset")
     repeat (2) @(cfg.wb.vif.drv_cb);
@@ -162,26 +195,31 @@ class uart_main_vseq extends uvm_sequence;
       `uvm_error("UART_RAL_PREPARE", {reg_handle.get_name(), " no tomo el valor previo al reset"})
   endtask
 
-  // Check reset through Wishbone first and then repeat preparation before the backdoor check
-  // The second check needs its own changed state or it would only reread an already-reset register
+  //Prueba del RAL, se hace dos veces:
+  //  1. puerta delantera: se cambian LCR, IER y SCR, y la secuencia de reset aplica reset y los lee por el bus
+  //  2. puerta trasera: se vuelven a cambiar, se aplica otro reset y se leen directo en el RTL
+  //la segunda vez se vuelve a cambiar todo, si no solo se releeria un registro que ya estaba en reset
   task ral_preamble();
     uart_hw_reset_seq seq;
     uvm_status_e status;
     seq = uart_hw_reset_seq::type_id::create("ral_reset");
     seq.vif = cfg.wb.vif;
-    seq.model = p_sequencer.regm;
+    seq.model = p_sequencer.regm; //le decimos a la secuencia que bloque del RAL revisar
+    //1. puerta delantera
     prepare_reset_register(p_sequencer.regm.LCR, 8'h1b);
     prepare_reset_register(p_sequencer.regm.IER, 8'h0f);
     prepare_reset_register(p_sequencer.regm.SCR, 8'ha5);
     `uvm_info("UART_RAL_FRONTDOOR", "Comprobando reset por Wishbone", UVM_LOW)
-    seq.start(null);
+    seq.start(null); //null porque esta secuencia no usa un secuenciador, usa los mapas del RAL
     repeat (2) @(cfg.wb.vif.drv_cb);
+    //2. puerta trasera
     prepare_reset_register(p_sequencer.regm.LCR, 8'h1b);
     prepare_reset_register(p_sequencer.regm.IER, 8'h0f);
     prepare_reset_register(p_sequencer.regm.SCR, 8'ha5);
-    seq.reset_blk(p_sequencer.regm);
-    p_sequencer.regm.reset();
+    seq.reset_blk(p_sequencer.regm); //aplicamos el reset en el DUT
+    p_sequencer.regm.reset();        //y ponemos el espejo del RAL en sus valores de reset
     `uvm_info("UART_RAL_BACKDOOR", "Comprobando reset por rutas HDL", UVM_LOW)
+    //mirror con UVM_CHECK lee el registro y lo compara con el espejo, UVM_BACKDOOR hace que lea directo en tb_top.dut.regs
     p_sequencer.regm.LCR.mirror(status, UVM_CHECK, UVM_BACKDOOR);
     if (status != UVM_IS_OK)
       `uvm_error("UART_RAL_STATUS", "Error backdoor en LCR")
@@ -193,8 +231,8 @@ class uart_main_vseq extends uvm_sequence;
       `uvm_error("UART_RAL_STATUS", "Error backdoor en SCR")
   endtask
 
-  // Choose one format before traffic and keep it stable for this run
-  // Changing it mid-frame needs extra handling in the original driver, monitors and scoreboard
+  //Configura el UART: elige un formato y lo deja fijo toda la corrida
+  //cambiarlo a la mitad de un caracter necesita mas manejo en el driver, los monitores y el scoreboard (eso es E3)
   task program_uart();
     int unsigned mode;
     int unsigned pick;
@@ -202,9 +240,10 @@ class uart_main_vseq extends uvm_sequence;
     bit [7:0] fcr;
     bit [7:0] ier;
     bit [7:0] mcr;
-    // Build LCR from weighted choices so excluding a format only requires changing its weight
+    //1. LCR: largo y bits de parada se eligen con sus pesos, asi para quitar un formato basta con poner su peso en 0
     active_lcr = cfg.choose_weight(cfg.line.wls_w) |
                  (cfg.choose_weight(cfg.line.stb_w) << 2);
+    //paridad: 0 ninguna, 1 impar, 2 par, 3 stick 1, 4 stick 0 (bits PEN, EPS y SP de LCR)
     mode = cfg.choose_weight(cfg.line.par_w);
     case (mode)
       1: active_lcr |= 8'h08;
@@ -212,8 +251,8 @@ class uart_main_vseq extends uvm_sequence;
       3: active_lcr |= 8'h28;
       4: active_lcr |= 8'h38;
     endcase
-    // Choose the region first so the fast range can be common without excluding larger divisors
-    // DL zero stays represented in the config but is rejected for this stage
+    //2. DL: primero se elige la zona (cero, lenta o rapida) y despues el valor dentro de ella
+    //asi la zona rapida sale casi siempre sin quitar los divisores grandes
     pick = $urandom_range(99, 0);
     if (pick < cfg.line.dl_zero_pct)
       active_dl = 0;
@@ -221,11 +260,11 @@ class uart_main_vseq extends uvm_sequence;
       active_dl = $urandom_range(cfg.line.dl_max, cfg.line.dl_fast_max + 1);
     else
       active_dl = $urandom_range(cfg.line.dl_fast_max, 1);
-    // Clear FIFOs only during setup so no expected payload has to be discarded here
-    // Choose IER and MCR bits independently because their percentages are not a single distribution
+    //3. FCR: nivel de disparo con sus pesos, y a veces limpiar las FIFOs (solo aqui, antes del trafico, asi no se pierde nada esperado)
     fcr = (cfg.choose_weight(cfg.ctrl.tl_w) << 6) | 8'h01;
     if ($urandom_range(99, 0) < cfg.ctrl.fcr_clear_pct)
       fcr |= $urandom_range(3, 1) << 1;
+    //4. IER y MCR: cada bit se sortea por separado con su propio porcentaje
     ier = 0;
     mcr = 0;
     for (int i = 0; i < 4; i++) begin
@@ -233,32 +272,32 @@ class uart_main_vseq extends uvm_sequence;
       mcr[i] = ($urandom_range(99, 0) < cfg.ctrl.mcr_bit_pct[i]);
     end
 
-    // Keep DLAB switching and both divisor bytes under the same lock
-    // An unrelated address-zero access in the middle would hit DLL instead of THR or RBR
-    // Switch the predictor map too so it interprets the observed addresses using the active bank
+    //5. Escribimos todo con el candado tomado de principio a fin
+    //mientras DLAB = 1 la direccion 0 es DLL, si otro acceso se metiera en medio escribiria DLL en vez de THR o RBR
+    //tambien cambiamos el mapa del predictor para que entienda las direcciones con el banco que esta activo
     cfg.bus_lock.get(1);
-    transfer(1, 3, active_lcr | 8'h80, result);
+    transfer(1, 3, active_lcr | 8'h80, result);           //LCR con DLAB = 1
     p_sequencer.predictor.map = p_sequencer.regm.map_dlab1;
-    transfer(1, 0, active_dl[7:0], result);
-    transfer(1, 1, active_dl[15:8], result);
-    transfer(0, 0, 0, result);
+    transfer(1, 0, active_dl[7:0], result);               //DLL
+    transfer(1, 1, active_dl[15:8], result);              //DLM
+    transfer(0, 0, 0, result);                            //leemos DLL para revisar
     if (result !== active_dl[7:0])
       `uvm_error("UART_DLL", "DLL no coincide con el divisor solicitado")
-    transfer(0, 1, 0, result);
+    transfer(0, 1, 0, result);                            //leemos DLM para revisar
     if (result !== active_dl[15:8])
       `uvm_error("UART_DLM", "DLM no coincide con el divisor solicitado")
-    transfer(1, 3, active_lcr, result);
+    transfer(1, 3, active_lcr, result);                   //LCR con DLAB = 0
     p_sequencer.predictor.map = p_sequencer.regm.map_dlab0;
-    transfer(0, 3, 0, result);
+    transfer(0, 3, 0, result);                            //leemos LCR para revisar
     if (result !== active_lcr)
       `uvm_error("UART_LCR", "LCR no coincide con el formato solicitado")
-    transfer(1, 2, fcr, result);
-    transfer(1, 1, ier, result);
-    transfer(1, 4, mcr, result);
+    transfer(1, 2, fcr, result);                          //FCR
+    transfer(1, 1, ier, result);                          //IER
+    transfer(1, 4, mcr, result);                          //MCR
     cfg.bus_lock.put(1);
 
-    // Update the shared serial config after programming and before starting traffic
-    // The driver and both monitors need the exact same framing as the DUT or comparisons become meaningless
+    //6. Copiamos el formato al cfg del agente serie despues de escribirlo y antes del trafico
+    //el driver y los dos monitores tienen que usar justo el mismo formato que el DUT, si no las comparaciones no sirven
     cfg.ser.wls = active_lcr[1:0];
     cfg.ser.stb = active_lcr[2];
     cfg.ser.pen = active_lcr[3];
@@ -268,21 +307,21 @@ class uart_main_vseq extends uvm_sequence;
     `uvm_info("UART_LINE", $sformatf("LCR=%02h DL=%0d", active_lcr, active_dl), UVM_LOW)
   endtask
 
-  // Write THR to make the DUT transmit -- the serial driver does not drive STX
-  // Wait for THRE here because this stage checks normal data rather than deliberate TX overflow
+  //Trafico TX: escribe bytes en THR para que el DUT los transmita (el driver serie no maneja stx)
+  //antes de cada escritura espera THRE (LSR[5]), en E2 se prueba trafico normal y no llenar la FIFO TX a proposito
   task send_tx(int unsigned count);
     bit [7:0] lsr;
     bit [7:0] ignored;
     repeat (count) begin
       do begin
-        access(0, 5, 0, lsr);
-      end while (!lsr[5]);
-      access(1, 0, $urandom_range(cfg.sw.tx_data_max, cfg.sw.tx_data_min), ignored);
+        access(0, 5, 0, lsr); //lee LSR
+      end while (!lsr[5]);    //hasta que THRE = 1
+      access(1, 0, $urandom_range(cfg.sw.tx_data_max, cfg.sw.tx_data_min), ignored); //escribe un dato aleatorio en THR
     end
   endtask
 
-  // Use the serial sequencer for data entering the DUT through SRX
-  // Wait after the last frame before marking the source done so RX service does not stop too early
+  //Trafico RX: arranca uart_rx_seq en el secuenciador del agente serie para mandar caracteres por srx
+  //al final espera 2 bits mas antes de marcar rx_done, asi el servicio no se detiene antes de tiempo
   task send_rx(int unsigned count);
     uart_rx_seq seq;
     seq = uart_rx_seq::type_id::create("rx_traffic");
@@ -293,61 +332,67 @@ class uart_main_vseq extends uvm_sequence;
     rx_done = 1;
   endtask
 
-  // Keep draining RBR while the external source runs
-  // An empty FIFO is not enough to stop -- another character may still be on the wire
-  // Delay and blind-read hooks stay disabled until their checking rules are implemented
+  //Servicio por sondeo: mientras llegan caracteres, lee LSR y si hay dato (DR = LSR[0]) lo saca de RBR
+  //que la FIFO este vacia no basta para terminar, puede venir otro caracter en camino, por eso tambien se espera rx_done
+  //el retraso de atencion y las lecturas ciegas estan en 0 en E2 hasta que el scoreboard sepa revisarlos
   task service_rx();
     bit [7:0] lsr;
     bit [7:0] ignored;
-    int unsigned delay_chars;
+    int unsigned delay_chars; //retraso de atencion en caracteres
     forever begin
       delay_chars = $urandom_range(cfg.sw.service_delay_max, cfg.sw.service_delay_min);
       repeat (longint'(delay_chars) * char_cycles()) @(cfg.wb.vif.drv_cb);
-      access(0, 5, 0, lsr);
+      access(0, 5, 0, lsr);       //lee LSR
       if (lsr[0]) begin
-        access(0, 0, 0, ignored);
+        access(0, 0, 0, ignored); //hay dato: lee RBR (lo compara el scoreboard)
       end else begin
         if ($urandom_range(99, 0) < cfg.sw.blind_read_pct)
-          access(0, 0, 0, ignored);
+          access(0, 0, 0, ignored); //lectura ciega: lee RBR sin dato
         if (rx_done)
-          break;
+          break; //ya no viene nada mas, termina el servicio
       end
     end
   endtask
 
-  // Do setup before launching the workers so nobody uses the reset divisor or the wrong format
-  // Choose both counts for each iteration so MIN equals MAX also works without a special path
+  //body es el flujo completo de la prueba
   task body();
     bit [7:0] lsr;
     int unsigned tx_count;
     int unsigned rx_count;
     cfg = p_sequencer.cfg;
+    //1. esperamos a que termine el reset inicial
     wait (cfg.wb.vif.rst === 1'b0);
     repeat (3) @(cfg.wb.vif.drv_cb);
+    //2. prueba del RAL (se puede apagar con un plusarg)
     if (cfg.run_ral_reset)
       ral_preamble();
+    //3. configuramos el UART antes del trafico, asi nadie usa el divisor de reset (DL = 0) ni otro formato
     program_uart();
 
+    //4. repetimos n_iter veces
     repeat (cfg.sw.n_iter) begin
+      //se sortea cuanto TX y cuanto RX en cada iteracion, asi con MIN = MAX tambien funciona sin un caso especial
       tx_count = $urandom_range(cfg.sw.tx_burst_max, cfg.sw.tx_burst_min);
       rx_count = $urandom_range(cfg.ser.burst_max, cfg.ser.burst_min);
       planned_tx += tx_count;
       planned_rx += rx_count;
       rx_done = 0;
       `uvm_info("UART_BURST", $sformatf("Objetivo TX=%0d RX=%0d", tx_count, rx_count), UVM_MEDIUM)
-      // Run both directions together because the UART can send and receive at the same time
-      // Only serialize shared Wishbone accesses -- serial input can keep running independently
+      //TX, RX y el servicio corren en paralelo porque el UART puede mandar y recibir al mismo tiempo
+      //solo los accesos al bus Wishbone se turnan (con el candado), la linea serie corre sola
+      //join espera a que terminen los tres
       fork
         send_tx(tx_count);
         send_rx(rx_count);
         service_rx();
       join
-      // Wait for TEMT rather than just finishing the last THR write
-      // The FIFO can be empty while the shift register is still sending the last character
+      //esperamos TEMT (LSR[6]) y no solo la ultima escritura a THR
+      //la FIFO puede estar vacia mientras el registro de corrimiento todavia manda el ultimo caracter
       do begin
         access(0, 5, 0, lsr);
       end while (!lsr[6]);
       repeat (3) @(cfg.wb.vif.drv_cb);
     end
   endtask
+
 endclass : uart_main_vseq

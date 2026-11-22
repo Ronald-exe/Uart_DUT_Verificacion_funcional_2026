@@ -1,17 +1,18 @@
 `timescale 1ns/1ps
-// Import the existing types and collect our classes here so the top only imports one new package
+//El paquete se encarga de juntar todas las clases del ambiente en un solo lugar
+//Asi tb_top solo hace "import uart_env_pkg::*;" y ya puede correr la prueba
 package uart_env_pkg;
-  import uvm_pkg::*;
-  import wb_pkg::*;
-  import ser_pkg::*;
-  import ral_pkg::*;
-  `include "uvm_macros.svh"
-  // Keep this order because each included class must see the types it uses
-  // The sequences need the virtual sequencer -- the test needs the completed environment type
-  `include "uart_env_cfg.sv"
-  `include "uart_scoreboard.sv"
-  `include "uart_vsequencer.sv"
-  `include "uart_sequences.sv"
-  `include "uart_env.sv"
-  `include "uart_base_test.sv"
+  import uvm_pkg::*;   //importamos las clases de UVM
+  import wb_pkg::*;    //importamos el agente Wishbone (wb_item, wb_agent, ...)
+  import ser_pkg::*;   //importamos el agente serie (ser_item, ser_agent, ...)
+  import ral_pkg::*;   //importamos el RAL (uart_reg_block, uart_reg_adapter)
+  `include "uvm_macros.svh" //incluimos las macros de UVM
+  //El orden importa: cada clase tiene que ir despues de las clases que usa
+  //por ejemplo las secuencias usan el secuenciador virtual y la prueba usa el ambiente completo
+  `include "uart_env_cfg.sv"      //configuracion y plusargs, no usa a nadie del ambiente
+  `include "uart_scoreboard.sv"   //usa la configuracion
+  `include "uart_vsequencer.sv"   //usa la configuracion y el RAL
+  `include "uart_sequences.sv"    //usa el secuenciador virtual
+  `include "uart_env.sv"          //usa a todos los anteriores
+  `include "uart_base_test.sv"    //usa el ambiente
 endpackage : uart_env_pkg

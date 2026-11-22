@@ -1,88 +1,115 @@
 
-// Keep the line settings together so changing a format does not mean hunting through sequences
-// These are runtime choices -- the same compiled DUT is used for every seed
-// Some plan defaults still enable pending features -- the E2 profile has to turn those off
+//En este archivo esta toda la configuracion del ambiente: los knobs y la funcion que lee los plusargs
+//Los knobs se separan en grupos, cada uno en su propia clase, asi cada ajuste tiene un lugar claro:
+//  uart_line_cfg: formato de la linea (LCR y DL)
+//  uart_ctrl_cfg: registros de control (FCR, IER y MCR)
+//  uart_sw_cfg:   lo que hace el software (escribir THR y atender lo que llega)
+//  uart_env_cfg:  junta a todos los anteriores y a los cfg de los agentes
+//Todos son elecciones al correr, el mismo DUT compilado sirve para todas las semillas
+
+//uart_line_cfg: knobs del formato de la linea
+//Hereda de uvm_object porque es configuracion
 class uart_line_cfg extends uvm_object;
+
+  //Registramos en la fabrica
   `uvm_object_utils(uart_line_cfg)
-  // Use a fast region for most runs and a slower tail for the larger divisors
-  // That gives slow baud rates a chance without making every seed take the maximum time
-  int unsigned dl_zero_pct = 1;
-  int unsigned dl_fast_max = 16;
-  int unsigned dl_max = 65535;
-  int unsigned dl_tail_pct = 2;
-  // Keep the break knob here because it belongs to LCR -- enabling it still fails the E2 check
-  int unsigned bc_pct = 5;
-  // Keep the array order fixed because the chosen index goes straight into the format encoding
-  // Data bits are [5,6,7,8] -- stops are [one,extended]
-  // Parity is [none,odd,even,stick-1,stick-0] -- weight zero removes that option
-  int unsigned wls_w[] = '{1,1,1,1};
-  int unsigned stb_w[] = '{1,1};
-  int unsigned par_w[] = '{1,1,1,1,1};
+
+  //Divisor DL en tres zonas: casi siempre la zona rapida y a veces la zona lenta (la cola)
+  //asi los baudios lentos tienen chance de salir sin que todas las semillas tarden muchisimo
+  int unsigned dl_zero_pct = 1;     //porcentaje de DL = 0
+  int unsigned dl_fast_max = 16;    //limite de la zona rapida (1 a 16)
+  int unsigned dl_max = 65535;      //DL maximo posible
+  int unsigned dl_tail_pct = 2;     //porcentaje de la zona lenta (17 a dl_max)
+  int unsigned bc_pct = 5;          //porcentaje de break TX, es de LCR por eso va aqui (en E2 da error si se activa)
+  //Pesos de cada opcion, el orden del arreglo es fijo porque la posicion elegida va directo a los bits de LCR
+  //un peso en 0 quita esa opcion
+  int unsigned wls_w[] = '{1,1,1,1};     //largo: 5, 6, 7 y 8 bits
+  int unsigned stb_w[] = '{1,1};         //parada: 1 bit, o 1.5/2 bits
+  int unsigned par_w[] = '{1,1,1,1,1};   //paridad: ninguna, impar, par, stick 1 y stick 0
+
+  //Se crea el constructor, como es objeto no lleva parent
   function new(string name = "uart_line_cfg");
     super.new(name);
   endfunction
+
 endclass : uart_line_cfg
 
-// Group the initial register controls here because they are programmed before traffic starts
-// Writing IER or MCR alone does not check whether interrupts or modem signals behave correctly
+//uart_ctrl_cfg: knobs de los registros que se programan antes del trafico
+//escribir IER o MCR no prueba por si solo que las interrupciones o el modem funcionen, eso lo revisa el scoreboard en E3
 class uart_ctrl_cfg extends uvm_object;
+
+  //Registramos en la fabrica
   `uvm_object_utils(uart_ctrl_cfg)
-  // Only clear before traffic for now -- clearing an active FIFO would need a discard model
-  int unsigned fcr_clear_pct = 10;
-  int unsigned loop_pct = 10;
-  // Trigger choices follow [1,4,8,14] characters
-  // IER and MCR use a percentage per bit -- those values are independent and do not need to add to 100
-  int unsigned tl_w[] = '{1,1,1,1};
+
+  int unsigned fcr_clear_pct = 10;  //porcentaje de limpiar las FIFOs, por ahora solo antes del trafico
+  int unsigned loop_pct = 10;       //porcentaje de loopback
+  int unsigned tl_w[] = '{1,1,1,1}; //pesos del nivel de disparo: 1, 4, 8 y 14 caracteres
+  //IER y MCR usan un porcentaje por bit, cada bit se sortea solo, por eso no tienen que sumar 100
   int unsigned ier_bit_pct[] = '{50,50,50,50};
   int unsigned mcr_bit_pct[] = '{50,50,50,50};
+
+  //Se crea el constructor
   function new(string name = "uart_ctrl_cfg");
     super.new(name);
   endfunction
+
 endclass : uart_ctrl_cfg
 
-// These knobs describe the software side -- THR writes and servicing the received characters
-// Keep one iteration as a TX and RX pair so either direction can also be disabled with its count
+//uart_sw_cfg: knobs del lado del software, escribir THR y atender los caracteres que llegan
+//cada iteracion es un par TX y RX, cualquiera de los dos se puede apagar poniendo su cantidad en 0
 class uart_sw_cfg extends uvm_object;
+
+  //Registramos en la fabrica
   `uvm_object_utils(uart_sw_cfg)
-  int unsigned n_iter = 20;
-  // Use inclusive MIN and MAX so the same generator can do random or fixed traffic
-  // For exactly 50 characters set both limits to 50 -- for no traffic set both to zero
-  int unsigned tx_burst_min = 0;
-  int unsigned tx_burst_max = 255;
-  int unsigned tx_data_min = 0;
-  int unsigned tx_data_max = 255;
-  // Measure service delay in character times so it still makes sense when the baud rate changes
-  // Delay, blind reads, random accesses, live reset and reconfiguration are still blocked in E2
-  // They need their checking rules before we can enable them
+
+  int unsigned n_iter = 20; //cuantas iteraciones hace la prueba
+  //MIN y MAX incluyen sus extremos, asi el mismo knob sirve para trafico aleatorio o fijo
+  //ej. para exactamente 50 caracteres se ponen los dos en 50, para no tener trafico los dos en 0
+  int unsigned tx_burst_min = 0;    //minimo de escrituras a THR por iteracion
+  int unsigned tx_burst_max = 255;  //maximo de escrituras a THR por iteracion
+  int unsigned tx_data_min = 0;     //dato minimo que se escribe en THR
+  int unsigned tx_data_max = 255;   //dato maximo que se escribe en THR
+  //El retraso de atencion se mide en tiempos de caracter, asi sigue teniendo sentido si cambian los baudios
+  //el retraso, las lecturas ciegas, los accesos al azar, el reset y la reconfiguracion con trafico estan bloqueados en E2
+  //porque el scoreboard todavia no sabe revisarlos
   int unsigned service_delay_min = 0;
   int unsigned service_delay_max = 20;
-  int unsigned blind_read_pct = 5;
-  int unsigned rand_access_pct = 5;
-  int unsigned recfg_pct = 5;
-  int unsigned rst_pct = 1;
-  // The order is [interrupt-driven,polling] -- leave the first weight at zero until IRQ service exists
+  int unsigned blind_read_pct = 5;   //porcentaje de leer RBR sin mirar LSR
+  int unsigned rand_access_pct = 5;  //porcentaje de acceso al azar
+  int unsigned recfg_pct = 5;        //porcentaje de reconfigurar con trafico
+  int unsigned rst_pct = 1;          //porcentaje de reset con trafico
+  //pesos del estilo de servicio: [interrupcion, sondeo], el primero va en 0 hasta que exista el servicio por interrupcion
   int unsigned mode_w[] = '{1,1};
+
+  //Se crea el constructor
   function new(string name = "uart_sw_cfg");
     super.new(name);
   endfunction
+
 endclass : uart_sw_cfg
 
-// Pass one shared configuration through the environment instead of parsing arguments in every component
-// The original agent configs live here too -- no need to change their source defaults
+//uart_env_cfg: la configuracion de todo el ambiente, un solo objeto compartido
+//asi los plusargs se leen en un solo lugar y no en cada componente (regla del enunciado)
+//adentro tambien estan los cfg de nuestros agentes, asi no hay que cambiar sus valores por defecto
 class uart_env_cfg extends uvm_object;
+
+  //Registramos en la fabrica
   `uvm_object_utils(uart_env_cfg)
-  // Separate line, register and software settings so each group has a clear place
-  // Keep the virtual interfaces inside the agent configs that already use them
+
+  //Handles a los grupos de knobs y a los cfg de los agentes (las interfaces virtuales van dentro de cada cfg de agente)
   uart_line_cfg line;
   uart_ctrl_cfg ctrl;
   uart_sw_cfg sw;
   wb_agent_cfg wb;
   ser_agent_cfg ser;
-  virtual modem_if mdm_vif;
-  // TX generation and RX service share one Wishbone master
-  // Use one token so they cannot overlap accesses or interrupt the DLAB programming steps
+  virtual modem_if mdm_vif; //interfaz del modem, en E2 todavia no hay agente de modem
+
+  //Candado del bus: el trafico TX y el servicio RX usan el mismo maestro Wishbone
+  //semaphore es un semaforo de SystemVerilog, con una sola llave (new(1)) solo uno puede usar el bus a la vez
+  //tambien evita que alguien se meta en medio mientras se programa DLAB
   semaphore bus_lock;
-  // Keep the planned error knobs visible -- reject them if enabled until stimulus and checking are ready
+
+  //Knobs de errores del plan, se dejan visibles pero si se activan da error hasta que el estimulo y el chequeo esten listos (E3)
   int unsigned ser_parity_err_pct = 5;
   int unsigned ser_frame_err_pct = 5;
   int unsigned ser_break_pct = 3;
@@ -91,20 +118,22 @@ class uart_env_cfg extends uvm_object;
   int unsigned ser_baud_err_pct = 5;
   int unsigned ser_baud_err_max = 8;
   int unsigned mdm_toggle_pct = 20;
-  // The per-access timeout catches stuck traffic handshakes
-  // The overall watchdog is also needed because a RAL access can stall outside that traffic helper
-  int unsigned run_ral_reset = 1;
-  int unsigned bus_timeout_cycles = 1000;
-  longint unsigned timeout_cycles;
-  // The plan has a waiver list but the current scoreboard has no waiver handling
-  // Require an empty list so we do not accidentally ignore a real mismatch
+
+  //Controles de la prueba
+  int unsigned run_ral_reset = 1;          //1 = corre la prueba de reset del RAL al inicio
+  int unsigned bus_timeout_cycles = 1000;  //tiempo maximo de cada acceso Wishbone
+  longint unsigned timeout_cycles;         //tiempo maximo de toda la secuencia (watchdog), se calcula al final de parse_plusargs
+  //Lista de BUG dispensados del plan, en E2 el scoreboard no la usa y es estricto, por eso se pide vacia
   string waive_bugs = "1,2,3,4,5";
-  // Save the value and where it came from so the log is enough to reconstruct the configuration
-  // Use the test as the report context because this config is an object rather than a component
-  string effective[string];
-  string origin[string];
+
+  //Para que el log alcance para repetir la corrida guardamos el valor final de cada knob y de donde salio
+  //son arreglos asociativos: el indice es el nombre del plusarg
+  string effective[string]; //valor final
+  string origin[string];    //"default" o "plusarg"
+  //como este cfg es un objeto y no un componente no tiene ruta en el arbol, por eso los mensajes se reportan con la prueba
   uvm_report_object reporter;
 
+  //Se crea el constructor y adentro se crean todos los grupos y los cfg de los agentes
   function new(string name = "uart_env_cfg");
     super.new(name);
     line = uart_line_cfg::type_id::create("line");
@@ -112,19 +141,21 @@ class uart_env_cfg extends uvm_object;
     sw = uart_sw_cfg::type_id::create("sw");
     wb = wb_agent_cfg::type_id::create("wb");
     ser = ser_agent_cfg::type_id::create("ser");
-    // Set the wider range on our instance -- changing the original agent file would affect other users
+    //le damos al agente serie un rango de rafagas mas grande aqui, asi no cambiamos el valor por defecto en el archivo del agente
     ser.burst_max = 255;
-    bus_lock = new(1);
+    bus_lock = new(1); //semaforo con una sola llave
   endfunction
 
-  // Parse the digits ourselves because converting directly to unsigned can hide a negative or overflow
-  // Check with a wider temporary first -- only narrow the value after it fits
+  //Convierte un texto a numero revisando cada digito a mano
+  //convertir directo a unsigned podria esconder un numero negativo o uno demasiado grande
+  //se usa un longint primero y solo al final se pasa a int, cuando ya sabemos que cabe
   function int unsigned decimal(string text, string key);
     longint unsigned number;
     number = 0;
     if ((text.len() == 0) || (text.len() > 10))
       `uvm_fatal_context("UART_ARG", {key, ": entero invalido"}, reporter)
     for (int i = 0; i < text.len(); i++) begin
+      //getc(i) da el codigo ASCII del caracter, 48 a 57 son los digitos del 0 al 9
       if ((text.getc(i) < 48) || (text.getc(i) > 57))
         `uvm_fatal_context("UART_ARG", {key, ": se requiere un entero no negativo"}, reporter)
       number = number * 10 + text.getc(i) - 48;
@@ -134,10 +165,11 @@ class uart_env_cfg extends uvm_object;
     return int'(number);
   endfunction
 
-  // Keep the default when the argument is absent
-  // Record whether it came from the command line so a default is not mistaken for an explicit choice
+  //Lee un plusarg de un solo numero, si no viene se queda el valor por defecto
+  //tambien anota de donde salio, asi un valor por defecto no se confunde con uno que se pidio
   function void read_uint(string key, ref int unsigned value);
     string raw;
+    //$value$plusargs busca +key=... en la linea de comandos y guarda lo que sigue al = en raw
     if ($value$plusargs({key, "=%s"}, raw)) begin
       value = decimal(raw, key);
       origin[key] = "plusarg";
@@ -147,8 +179,9 @@ class uart_env_cfg extends uvm_object;
     effective[key] = $sformatf("%0d", value);
   endfunction
 
-  // Read weights as a fixed-length list so a missing element cannot silently shift the choices
-  // Percentages are checked one by one -- weights need a nonzero total for the random pick
+  //Lee un plusarg que es una lista separada por comas (ej. +UART_LCR_WLS_WEIGHTS=0,0,0,1)
+  //tiene que traer exactamente la cantidad de elementos esperada, si falta uno se correrian las opciones
+  //si son porcentajes se revisa que ninguno pase de 100, si son pesos se revisa que la suma no sea 0
   function void read_vector(string key, ref int unsigned values[], input bit percentages = 0);
     string raw;
     string token;
@@ -157,6 +190,7 @@ class uart_env_cfg extends uvm_object;
     if ($value$plusargs({key, "=%s"}, raw)) begin
       token = "";
       index = 0;
+      //recorremos el texto caracter por caracter, 44 es el codigo ASCII de la coma
       for (int i = 0; i <= raw.len(); i++) begin
         if ((i == raw.len()) || (raw.getc(i) == 44)) begin
           if (index >= values.size())
@@ -174,6 +208,7 @@ class uart_env_cfg extends uvm_object;
     end else begin
       origin[key] = "default";
     end
+    //armamos el texto del valor final y revisamos los limites
     raw = "";
     sum = 0;
     foreach (values[i]) begin
@@ -187,29 +222,30 @@ class uart_env_cfg extends uvm_object;
     effective[key] = raw;
   endfunction
 
-  // Keep configuration failures in UVM reporting so the usual report actions still apply
+  //Si no se cumple la condicion detiene la simulacion con un fatal de UVM
   function void require(bit condition, string message);
     if (!condition)
       `uvm_fatal_context("UART_CFG", message, reporter)
   endfunction
 
-  // Stop at configuration time rather than running with a feature that has no implementation yet
+  //Si se activa algo que todavia no esta implementado, detiene la simulacion al configurar y no a la mitad de la corrida
   function void unsupported(int unsigned value, string name);
     if (value != 0)
       `uvm_fatal_context("UART_E2_CAPABILITY", {name, " aun no implementado por los agentes/integracion actuales; usar el perfil plusargs.args"}, reporter)
   endfunction
 
-  // Parse once before creating the environment so every component sees the same validated values
-  // Do the capability checks here too -- unsupported settings should fail before traffic starts
+  //parse_plusargs: el UNICO lugar donde se leen los plusargs
+  //se llama una vez en la prueba, antes de crear el ambiente, asi todos los componentes ven los mismos valores ya revisados
+  //aqui tambien se revisa que no se active nada que todavia no esta implementado
   function void parse_plusargs(uvm_report_object context_reporter);
     string args[$];
     string key;
     string raw;
     int equals;
-    uvm_cmdline_processor command_line;
+    uvm_cmdline_processor command_line; //clase de UVM que da acceso a todos los argumentos de la linea de comandos
     reporter = context_reporter;
 
-    // Read the scalar knobs in groups that match the plan so it is easier to find a setting
+    //1. Leemos los knobs de un solo numero, en grupos como en la tabla de plusargs del plan
     read_uint("UART_LCR_DL_ZERO_PCT", line.dl_zero_pct);
     read_uint("UART_LCR_DL_FAST_MAX", line.dl_fast_max);
     read_uint("UART_LCR_DL_MAX", line.dl_max);
@@ -246,7 +282,7 @@ class uart_env_cfg extends uvm_object;
     read_uint("UART_MDM_TOGGLE_PCT", mdm_toggle_pct);
     read_uint("UART_RAL_HW_RESET", run_ral_reset);
     read_uint("UART_BUS_TIMEOUT_CYCLES", bus_timeout_cycles);
-    // Read the lists separately because they need both length and weight checks
+    //2. Leemos las listas aparte porque necesitan revisar su largo y sus pesos (el ultimo argumento dice si son porcentajes)
     read_vector("UART_LCR_WLS_WEIGHTS", line.wls_w, 0);
     read_vector("UART_LCR_STB_WEIGHTS", line.stb_w, 0);
     read_vector("UART_LCR_PAR_WEIGHTS", line.par_w, 0);
@@ -255,8 +291,8 @@ class uart_env_cfg extends uvm_object;
     read_vector("UART_MCR_BIT_PCT", ctrl.mcr_bit_pct, 1);
     read_vector("UART_SW_MODE_WEIGHTS", sw.mode_w, 0);
 
-    // An empty waiver value is valid here -- checking only the string conversion can miss it
-    // First detect the argument itself and then read whatever follows the equals sign
+    //3. La lista de BUG dispensados puede venir vacia (+UART_SCB_WAIVE_BUGS=), por eso se lee distinto
+    //primero $test$plusargs revisa si el argumento esta y despues se lee lo que sigue al =
     key = "UART_SCB_WAIVE_BUGS";
     if ($test$plusargs({key, "="})) begin
       raw = "";
@@ -268,8 +304,8 @@ class uart_env_cfg extends uvm_object;
     end
     effective[key] = waive_bugs;
 
-    // A value can fit its type and still make no sense for the test
-    // Check the range pairs, divisor regions and percentages before using them in random picks
+    //4. Revisamos que los valores tengan sentido, un valor puede caber en su tipo y aun asi no servir para la prueba
+    //pares MIN y MAX, zonas de DL y porcentajes, todo antes de usarlos en un sorteo
     require(sw.n_iter > 0, "UART_SW_ITER debe ser positivo");
     require((sw.tx_burst_min <= sw.tx_burst_max) && (sw.tx_burst_max <= 255), "Rango TX invalido");
     require((ser.burst_min <= ser.burst_max) && (ser.burst_max <= 255), "Rango RX invalido");
@@ -291,16 +327,19 @@ class uart_env_cfg extends uvm_object;
             (mdm_toggle_pct <= 100) && (ser_baud_err_max <= 20), "Porcentaje fuera de rango");
     require((run_ral_reset <= 1) && (bus_timeout_cycles > 0), "Control de reset/timeout invalido");
 
+    //el silencio mas largo (gap_max bits) no puede pasarse del contador de 32 bits del driver serie
     require(longint'(ser.gap_max) * 16 * line.dl_max <= 32'hffffffff,
             "GAP_MAX por periodo de bit desborda el contador del driver original");
+    //el tiempo maximo de un acceso tiene que ser mas grande que los retardos mas el saludo con ack
     require(longint'(wb.delay_max) + wb.stb_delay_max + 16 < bus_timeout_cycles,
             "BUS_TIMEOUT_CYCLES debe superar los retardos WB mas el handshake");
 
-    // Catch misspelled UART arguments here -- otherwise a typo could leave a default active unnoticed
+    //5. Buscamos plusargs +UART_ mal escritos, si no un error de dedo dejaria el valor por defecto sin que nadie se de cuenta
     command_line = uvm_cmdline_processor::get_inst();
-    void'(command_line.get_plusargs(args));
+    void'(command_line.get_plusargs(args)); //args queda con todos los plusargs de la linea de comandos
     foreach (args[i]) begin
       if ((args[i].len() >= 6) && (args[i].substr(0, 5) == "+UART_")) begin
+        //buscamos el = (61 es su codigo ASCII)
         equals = args[i].len();
         for (int j = 1; j < args[i].len(); j++) begin
           if (args[i].getc(j) == 61) begin
@@ -311,16 +350,18 @@ class uart_env_cfg extends uvm_object;
         if (equals == args[i].len())
           `uvm_fatal_context("UART_ARG", {"Se requiere NOMBRE=valor: ", args[i]}, reporter)
         key = args[i].substr(1, equals - 1);
+        //si el nombre no es uno de los que leimos arriba, esta mal escrito
         if (!effective.exists(key))
           `uvm_fatal_context("UART_UNKNOWN_ARG", {"Plusarg desconocido: ", key}, reporter)
       end
     end
-    // Print defaults too -- the seed by itself is not enough to reproduce a run with different knobs
+    //6. Imprimimos todos los knobs con su valor y su origen, tambien los por defecto
+    //la semilla sola no alcanza para repetir una corrida si los knobs eran otros (regla del enunciado)
     foreach (effective[name])
       `uvm_info_context("UART_CFG", $sformatf("%s=%s (%s)", name, effective[name], origin[name]), UVM_LOW, reporter)
 
-    // Keep this list explicit while E2 is incomplete
-    // The plusargs file disables these features -- remove a check only when its real support is added
+    //7. Lista de lo que todavia no esta implementado en E2, si alguno no esta en 0 la prueba se detiene
+    //el archivo plusargs.args los pone en 0, cada linea se quita cuando su soporte este listo
     unsupported(line.bc_pct, "Break TX");
     unsupported(line.dl_zero_pct, "Trafico con DL=0");
     unsupported(ctrl.loop_pct, "Loopback");
@@ -340,16 +381,17 @@ class uart_env_cfg extends uvm_object;
     unsupported(mdm_toggle_pct, "Estimulo modem");
     require(waive_bugs == "", "En E2 el scoreboard es estricto: usar +UART_SCB_WAIVE_BUGS=");
 
-    // Scale the watchdog with the configured traffic and baud rate
-    // A fixed time would kill valid runs with large divisors -- leave extra room for polling and bus work
-    // This only bounds a stuck run -- it does not prove that the timing is correct
+    //8. Calculamos el tiempo maximo de toda la prueba (watchdog) segun el trafico y los baudios
+    //un tiempo fijo mataria corridas validas con DL grande, por eso crece con la cantidad de caracteres y con dl_max
+    //esto solo corta una corrida que se quedo pegada, no prueba que los tiempos esten bien
     timeout_cycles = 10000 + 4 * longint'(sw.n_iter) *
       (longint'(sw.tx_burst_max + ser.burst_max + 64) * 12 * 16 * line.dl_max +
        longint'(ser.burst_max) * (ser.gap_max + 12 * longint'(sw.service_delay_max)) * 16 * line.dl_max);
   endfunction
 
-  // Pick from the total weight and subtract each bucket until the pick falls inside one
-  // A zero weight gets no part of the range -- validation already ruled out a zero total
+  //Elige una opcion segun sus pesos, ej. pesos {1,1,2} dan 25 %, 25 % y 50 %
+  //se sortea un numero entre 0 y la suma de los pesos y se le va restando cada peso hasta que cae dentro de uno
+  //un peso en 0 nunca sale, y la suma nunca es 0 porque ya se reviso en read_vector
   function int unsigned choose_weight(int unsigned weights[]);
     int unsigned sum;
     int unsigned pick;
@@ -364,4 +406,5 @@ class uart_env_cfg extends uvm_object;
     end
     return 0;
   endfunction
+
 endclass : uart_env_cfg
