@@ -42,6 +42,7 @@ class uart_env extends uvm_env;
   uart_timed_reg_adapter adapter;          //adaptador del RAL con pausa
   uvm_reg_predictor #(wb_item) predictor;  //predictor de UVM, actualiza el espejo del RAL con lo que ve el monitor
   uart_scoreboard scb;                     //scoreboard que compara TX y RX
+  uart_coverage cov;                       //cobertura funcional (covergroups)
   uart_vsequencer vseqr;                   //secuenciador virtual donde corre la secuencia principal
 
   //Se crea el constructor, parent es la prueba que contiene al ambiente
@@ -60,6 +61,7 @@ class uart_env extends uvm_env;
     uvm_config_db#(wb_agent_cfg)::set(this, "wb_agt*", "cfg", cfg.wb);
     uvm_config_db#(ser_agent_cfg)::set(this, "ser_agt*", "cfg", cfg.ser);
     uvm_config_db#(uart_env_cfg)::set(this, "scb", "cfg", cfg);
+    uvm_config_db#(uart_env_cfg)::set(this, "cov", "cfg", cfg);
     //Creamos los componentes llamando a la fabrica, el ambiente es el parent (this) de cada uno
     wb_agt = wb_agent::type_id::create("wb_agt", this);
     ser_agt = ser_agent::type_id::create("ser_agt", this);
@@ -69,6 +71,7 @@ class uart_env extends uvm_env;
     adapter = uart_timed_reg_adapter::type_id::create("adapter");
     predictor = uvm_reg_predictor#(wb_item)::type_id::create("predictor", this);
     scb = uart_scoreboard::type_id::create("scb", this);
+    cov = uart_coverage::type_id::create("cov", this);
     vseqr = uart_vsequencer::type_id::create("vseqr", this);
   endfunction
 
@@ -92,6 +95,10 @@ class uart_env extends uvm_env;
     //cada monitor va a una entrada distinta del scoreboard, asi el scoreboard sabe la direccion por la conexion
     ser_agt.mon_tx.ap.connect(scb.tx_in.analysis_export);
     ser_agt.mon_rx.ap.connect(scb.rx_in.analysis_export);
+    //La cobertura escucha a los mismos tres monitores, un analysis port puede tener varios conectados
+    wb_agt.mon.ap.connect(cov.wb_in.analysis_export);
+    ser_agt.mon_tx.ap.connect(cov.tx_in.analysis_export);
+    ser_agt.mon_rx.ap.connect(cov.rx_in.analysis_export);
     //Al secuenciador virtual solo le damos handles, no es otra conexion de driver
     //los secuenciadores reales de cada agente siguen manejando el saludo con su driver
     vseqr.wb_sqr = wb_agt.sqr;

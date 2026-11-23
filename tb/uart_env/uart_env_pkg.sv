@@ -11,6 +11,7 @@ package uart_env_pkg;
   //por ejemplo las secuencias usan el secuenciador virtual y la prueba usa el ambiente completo
   `include "uart_env_cfg.sv"      //configuracion y plusargs, no usa a nadie del ambiente
   `include "uart_scoreboard.sv"   //usa la configuracion
+  `include "uart_coverage.sv"     //usa la configuracion, escucha a los mismos monitores que el scoreboard
   `include "uart_vsequencer.sv"   //usa la configuracion y el RAL
   `include "uart_sequences.sv"    //usa el secuenciador virtual
   `include "uart_env.sv"          //usa a todos los anteriores
