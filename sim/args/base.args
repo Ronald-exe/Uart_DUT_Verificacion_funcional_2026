@@ -1,7 +1,6 @@
-// Use the same test with a profile limited to the capabilities currently implemented
-// Keep one iteration for the first run -- TX and RX counts still default to the full 0 to 255 range
+// Caso base: la misma uart_base_test con un perfil limitado a lo que ya esta implementado
+// Iterations and TX/RX burst sizes use the plan defaults (20 iterations, bursts of 0 to 20)
 // Leave line-format weights unchanged so supported formats can still vary across seeds
-+UART_SW_ITER=1
 
 // Keep the baud rate fast here so the first integration run does not spend most of its time waiting
 // Disable break and loopback until their stimulus and checking are ready

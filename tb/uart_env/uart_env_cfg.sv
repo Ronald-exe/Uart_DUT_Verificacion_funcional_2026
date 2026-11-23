@@ -4,6 +4,7 @@
 //  uart_line_cfg: formato de la linea (LCR y DL)
 //  uart_ctrl_cfg: registros de control (FCR, IER y MCR)
 //  uart_sw_cfg:   lo que hace el software (escribir THR y atender lo que llega)
+//  uart_scb_cfg:  lo que necesita el scoreboard (la lista de BUG dispensados)
 //  uart_env_cfg:  junta a todos los anteriores y a los cfg de los agentes
 //Todos son elecciones al correr, el mismo DUT compilado sirve para todas las semillas
 
@@ -66,7 +67,7 @@ class uart_sw_cfg extends uvm_object;
   //MIN y MAX incluyen sus extremos, asi el mismo knob sirve para trafico aleatorio o fijo
   //ej. para exactamente 50 caracteres se ponen los dos en 50, para no tener trafico los dos en 0
   int unsigned tx_burst_min = 0;    //minimo de escrituras a THR por iteracion
-  int unsigned tx_burst_max = 255;  //maximo de escrituras a THR por iteracion
+  int unsigned tx_burst_max = 20;   //maximo de escrituras a THR por iteracion (20 como en la seccion 7 del plan, pasa las 16 de la FIFO)
   int unsigned tx_data_min = 0;     //dato minimo que se escribe en THR
   int unsigned tx_data_max = 255;   //dato maximo que se escribe en THR
   //El retraso de atencion se mide en tiempos de caracter, asi sigue teniendo sentido si cambian los baudios
@@ -88,6 +89,23 @@ class uart_sw_cfg extends uvm_object;
 
 endclass : uart_sw_cfg
 
+//uart_scb_cfg: knobs del scoreboard, va en su propio objeto como dice la seccion 9.3 del plan
+class uart_scb_cfg extends uvm_object;
+
+  //Registramos en la fabrica
+  `uvm_object_utils(uart_scb_cfg)
+
+  //Lista de BUG dispensados del plan (BUG-01 a BUG-05), los de la lista se reportan como aviso y no como error
+  //en E2 el scoreboard todavia no la usa y es estricto, por eso se pide vacia
+  string waive_bugs = "1,2,3,4,5";
+
+  //Se crea el constructor
+  function new(string name = "uart_scb_cfg");
+    super.new(name);
+  endfunction
+
+endclass : uart_scb_cfg
+
 //uart_env_cfg: la configuracion de todo el ambiente, un solo objeto compartido
 //asi los plusargs se leen en un solo lugar y no en cada componente (regla del enunciado)
 //adentro tambien estan los cfg de nuestros agentes, asi no hay que cambiar sus valores por defecto
@@ -100,6 +118,7 @@ class uart_env_cfg extends uvm_object;
   uart_line_cfg line;
   uart_ctrl_cfg ctrl;
   uart_sw_cfg sw;
+  uart_scb_cfg scb;
   wb_agent_cfg wb;
   ser_agent_cfg ser;
   virtual modem_if mdm_vif; //interfaz del modem, en E2 todavia no hay agente de modem
@@ -120,18 +139,10 @@ class uart_env_cfg extends uvm_object;
   int unsigned mdm_toggle_pct = 20;
 
   //Controles de la prueba
-  int unsigned run_ral_reset = 1;          //1 = corre la prueba de reset del RAL al inicio
-  int unsigned bus_timeout_cycles = 1000;  //tiempo maximo de cada acceso Wishbone
-  longint unsigned timeout_cycles;         //tiempo maximo de toda la secuencia (watchdog), se calcula al final de parse_plusargs
-  //Lista de BUG dispensados del plan, en E2 el scoreboard no la usa y es estricto, por eso se pide vacia
-  string waive_bugs = "1,2,3,4,5";
-
-  //Para que el log alcance para repetir la corrida guardamos el valor final de cada knob y de donde salio
-  //son arreglos asociativos: el indice es el nombre del plusarg
-  string effective[string]; //valor final
-  string origin[string];    //"default" o "plusarg"
-  //como este cfg es un objeto y no un componente no tiene ruta en el arbol, por eso los mensajes se reportan con la prueba
-  uvm_report_object reporter;
+  int unsigned run_ral_reset = 1;              //1 = corre la prueba de reset del RAL al inicio
+  int unsigned bus_timeout_cycles = 1000;      //tiempo maximo de cada acceso Wishbone
+  int unsigned timeout_cycles = 1000000000;    //watchdog: tiempo maximo de toda la secuencia, solo corta una corrida que se quedo pegada
+                                               //con baudios muy lentos (DL grande) hay que subirlo con +UART_TIMEOUT_CYCLES
 
   //Se crea el constructor y adentro se crean todos los grupos y los cfg de los agentes
   function new(string name = "uart_env_cfg");
@@ -139,113 +150,83 @@ class uart_env_cfg extends uvm_object;
     line = uart_line_cfg::type_id::create("line");
     ctrl = uart_ctrl_cfg::type_id::create("ctrl");
     sw = uart_sw_cfg::type_id::create("sw");
+    scb = uart_scb_cfg::type_id::create("scb");
     wb = wb_agent_cfg::type_id::create("wb");
     ser = ser_agent_cfg::type_id::create("ser");
-    //le damos al agente serie un rango de rafagas mas grande aqui, asi no cambiamos el valor por defecto en el archivo del agente
-    ser.burst_max = 255;
     bus_lock = new(1); //semaforo con una sola llave
   endfunction
 
-  //Convierte un texto a numero revisando cada digito a mano
-  //convertir directo a unsigned podria esconder un numero negativo o uno demasiado grande
-  //se usa un longint primero y solo al final se pasa a int, cuando ya sabemos que cabe
-  function int unsigned decimal(string text, string key);
-    longint unsigned number;
-    number = 0;
-    if ((text.len() == 0) || (text.len() > 10))
-      `uvm_fatal_context("UART_ARG", {key, ": entero invalido"}, reporter)
-    for (int i = 0; i < text.len(); i++) begin
-      //getc(i) da el codigo ASCII del caracter, 48 a 57 son los digitos del 0 al 9
-      if ((text.getc(i) < 48) || (text.getc(i) > 57))
-        `uvm_fatal_context("UART_ARG", {key, ": se requiere un entero no negativo"}, reporter)
-      number = number * 10 + text.getc(i) - 48;
-    end
-    if (number > 64'hffffffff)
-      `uvm_fatal_context("UART_ARG", {key, ": entero fuera de rango"}, reporter)
-    return int'(number);
-  endfunction
-
   //Lee un plusarg de un solo numero, si no viene se queda el valor por defecto
-  //tambien anota de donde salio, asi un valor por defecto no se confunde con uno que se pidio
+  //$value$plusargs busca +key=... en la linea de comandos, %d dice que lo que sigue al = es un numero
+  //imprime el valor final y de donde salio, asi la semilla y el log alcanzan para repetir la corrida (regla del enunciado)
   function void read_uint(string key, ref int unsigned value);
-    string raw;
-    //$value$plusargs busca +key=... en la linea de comandos y guarda lo que sigue al = en raw
-    if ($value$plusargs({key, "=%s"}, raw)) begin
-      value = decimal(raw, key);
-      origin[key] = "plusarg";
-    end else begin
-      origin[key] = "default";
-    end
-    effective[key] = $sformatf("%0d", value);
+    string origin = "default";
+    if ($value$plusargs({key, "=%d"}, value))
+      origin = "plusarg";
+    `uvm_info("UART_CFG", $sformatf("%s=%0d (%s)", key, value, origin), UVM_LOW)
   endfunction
 
   //Lee un plusarg que es una lista separada por comas (ej. +UART_LCR_WLS_WEIGHTS=0,0,0,1)
-  //tiene que traer exactamente la cantidad de elementos esperada, si falta uno se correrian las opciones
-  //si son porcentajes se revisa que ninguno pase de 100, si son pesos se revisa que la suma no sea 0
+  //Pasos:
+  //  1. tomamos el texto que sigue al =
+  //  2. lo recorremos y cada vez que aparece una coma convertimos el pedazo a numero con atoi
+  //  3. tiene que traer exactamente la cantidad de elementos esperada, si falta uno se correrian las opciones
+  //  4. si son porcentajes ninguno pasa de 100, si son pesos la suma no puede ser 0
   function void read_vector(string key, ref int unsigned values[], input bit percentages = 0);
-    string raw;
-    string token;
-    int index;
-    longint unsigned sum;
+    string raw;            //el texto completo, ej. "0,0,0,1"
+    string piece = "";     //el numero que vamos armando
+    string origin = "default";
+    string text = "";      //el valor final para imprimirlo
+    int index = 0;         //en que posicion del arreglo vamos
+    int unsigned sum = 0;
+
+    //1. si viene el plusarg lo leemos como texto (%s)
     if ($value$plusargs({key, "=%s"}, raw)) begin
-      token = "";
-      index = 0;
-      //recorremos el texto caracter por caracter, 44 es el codigo ASCII de la coma
+      origin = "plusarg";
+      //2. recorremos letra por letra, la coma o el final del texto cierran un numero
       for (int i = 0; i <= raw.len(); i++) begin
-        if ((i == raw.len()) || (raw.getc(i) == 44)) begin
-          if (index >= values.size())
-            `uvm_fatal_context("UART_ARG", {key, ": demasiados elementos"}, reporter)
-          values[index] = decimal(token, key);
+        if ((i == raw.len()) || (raw.substr(i, i) == ",")) begin
+          if (index < values.size())
+            values[index] = piece.atoi(); //atoi convierte el texto a numero, ej. "14" -> 14
           index++;
-          token = "";
+          piece = "";
         end else begin
-          token = {token, raw.substr(i, i)};
+          piece = {piece, raw.substr(i, i)};
         end
       end
+      //3. revisamos la cantidad de elementos
       if (index != values.size())
-        `uvm_fatal_context("UART_ARG", {key, ": cantidad de elementos incorrecta"}, reporter)
-      origin[key] = "plusarg";
-    end else begin
-      origin[key] = "default";
+        `uvm_fatal("UART_ARG", $sformatf("%s: se esperaban %0d elementos y vinieron %0d", key, values.size(), index))
     end
-    //armamos el texto del valor final y revisamos los limites
-    raw = "";
-    sum = 0;
+
+    //4. revisamos los limites y armamos el texto para imprimir
     foreach (values[i]) begin
       sum += values[i];
       if (percentages && (values[i] > 100))
-        `uvm_fatal_context("UART_ARG", {key, ": porcentaje mayor que 100"}, reporter)
-      raw = {raw, (i == 0) ? "" : ",", $sformatf("%0d", values[i])};
+        `uvm_fatal("UART_ARG", {key, ": porcentaje mayor que 100"})
+      text = {text, (i == 0) ? "" : ",", $sformatf("%0d", values[i])};
     end
-    if (!percentages && ((sum == 0) || (sum > 32'hffffffff)))
-      `uvm_fatal_context("UART_ARG", {key, ": suma de pesos invalida"}, reporter)
-    effective[key] = raw;
+    if (!percentages && (sum == 0))
+      `uvm_fatal("UART_ARG", {key, ": la suma de los pesos no puede ser 0"})
+    `uvm_info("UART_CFG", $sformatf("%s=%s (%s)", key, text, origin), UVM_LOW)
   endfunction
 
   //Si no se cumple la condicion detiene la simulacion con un fatal de UVM
   function void require(bit condition, string message);
     if (!condition)
-      `uvm_fatal_context("UART_CFG", message, reporter)
+      `uvm_fatal("UART_CFG", message)
   endfunction
 
   //Si se activa algo que todavia no esta implementado, detiene la simulacion al configurar y no a la mitad de la corrida
   function void unsupported(int unsigned value, string name);
     if (value != 0)
-      `uvm_fatal_context("UART_E2_CAPABILITY", {name, " aun no implementado por los agentes/integracion actuales; usar el perfil plusargs.args"}, reporter)
+      `uvm_fatal("UART_E2_CAPABILITY", {name, " aun no implementado; usar el caso sim/args/base.args"})
   endfunction
 
   //parse_plusargs: el UNICO lugar donde se leen los plusargs
   //se llama una vez en la prueba, antes de crear el ambiente, asi todos los componentes ven los mismos valores ya revisados
-  //aqui tambien se revisa que no se active nada que todavia no esta implementado
-  function void parse_plusargs(uvm_report_object context_reporter);
-    string args[$];
-    string key;
-    string raw;
-    int equals;
-    uvm_cmdline_processor command_line; //clase de UVM que da acceso a todos los argumentos de la linea de comandos
-    reporter = context_reporter;
-
-    //1. Leemos los knobs de un solo numero, en grupos como en la tabla de plusargs del plan
+  function void parse_plusargs();
+    //1. Leemos los knobs de un solo numero, en grupos como en la tabla de plusargs del plan (seccion 7)
     read_uint("UART_LCR_DL_ZERO_PCT", line.dl_zero_pct);
     read_uint("UART_LCR_DL_FAST_MAX", line.dl_fast_max);
     read_uint("UART_LCR_DL_MAX", line.dl_max);
@@ -282,7 +263,9 @@ class uart_env_cfg extends uvm_object;
     read_uint("UART_MDM_TOGGLE_PCT", mdm_toggle_pct);
     read_uint("UART_RAL_HW_RESET", run_ral_reset);
     read_uint("UART_BUS_TIMEOUT_CYCLES", bus_timeout_cycles);
-    //2. Leemos las listas aparte porque necesitan revisar su largo y sus pesos (el ultimo argumento dice si son porcentajes)
+    read_uint("UART_TIMEOUT_CYCLES", timeout_cycles);
+
+    //2. Leemos las listas, el ultimo argumento dice si son porcentajes (1) o pesos (0)
     read_vector("UART_LCR_WLS_WEIGHTS", line.wls_w, 0);
     read_vector("UART_LCR_STB_WEIGHTS", line.stb_w, 0);
     read_vector("UART_LCR_PAR_WEIGHTS", line.par_w, 0);
@@ -291,77 +274,38 @@ class uart_env_cfg extends uvm_object;
     read_vector("UART_MCR_BIT_PCT", ctrl.mcr_bit_pct, 1);
     read_vector("UART_SW_MODE_WEIGHTS", sw.mode_w, 0);
 
-    //3. La lista de BUG dispensados puede venir vacia (+UART_SCB_WAIVE_BUGS=), por eso se lee distinto
-    //primero $test$plusargs revisa si el argumento esta y despues se lee lo que sigue al =
-    key = "UART_SCB_WAIVE_BUGS";
-    if ($test$plusargs({key, "="})) begin
-      raw = "";
-      void'($value$plusargs({key, "=%s"}, raw));
-      waive_bugs = raw;
-      origin[key] = "plusarg";
+    //3. La lista de BUG dispensados es texto y puede venir vacia (+UART_SCB_WAIVE_BUGS=)
+    //con el valor vacio $value$plusargs no cambia la variable, por eso primero revisamos si esta ($test$plusargs),
+    //la dejamos vacia y despues leemos lo que sigue al =
+    if ($test$plusargs("UART_SCB_WAIVE_BUGS=")) begin
+      scb.waive_bugs = "";
+      void'($value$plusargs("UART_SCB_WAIVE_BUGS=%s", scb.waive_bugs));
+      `uvm_info("UART_CFG", {"UART_SCB_WAIVE_BUGS=", scb.waive_bugs, " (plusarg)"}, UVM_LOW)
     end else begin
-      origin[key] = "default";
+      `uvm_info("UART_CFG", {"UART_SCB_WAIVE_BUGS=", scb.waive_bugs, " (default)"}, UVM_LOW)
     end
-    effective[key] = waive_bugs;
 
-    //4. Revisamos que los valores tengan sentido, un valor puede caber en su tipo y aun asi no servir para la prueba
-    //pares MIN y MAX, zonas de DL y porcentajes, todo antes de usarlos en un sorteo
+    //4. Revisamos que los valores tengan sentido antes de usarlos en un sorteo (seccion 7 del plan)
+    //pares MIN <= MAX, rangos y porcentajes, si algo esta mal UVM_FATAL
     require(sw.n_iter > 0, "UART_SW_ITER debe ser positivo");
     require((sw.tx_burst_min <= sw.tx_burst_max) && (sw.tx_burst_max <= 255), "Rango TX invalido");
     require((ser.burst_min <= ser.burst_max) && (ser.burst_max <= 255), "Rango RX invalido");
     require((sw.tx_data_min <= sw.tx_data_max) && (sw.tx_data_max <= 255), "Rango de datos TX invalido");
     require((ser.data_min <= ser.data_max) && (ser.data_max <= 255), "Rango de datos RX invalido");
-    require(sw.service_delay_min <= sw.service_delay_max, "Retraso de servicio invertido");
-    require((line.dl_fast_max > 0) && (line.dl_fast_max <= line.dl_max) &&
-            (line.dl_max <= 65535), "Rango DL invalido");
-    require((line.dl_zero_pct <= 100) && (line.dl_tail_pct <= 100) &&
-            (line.dl_zero_pct + line.dl_tail_pct <= 100) &&
-            ((line.dl_tail_pct == 0) || (line.dl_fast_max < line.dl_max)), "Distribucion DL invalida");
-    require((line.bc_pct <= 100) && (ctrl.fcr_clear_pct <= 100) &&
-            (ctrl.loop_pct <= 100) && (sw.blind_read_pct <= 100) &&
-            (sw.rand_access_pct <= 100) && (sw.recfg_pct <= 100) &&
-            (sw.rst_pct <= 100) && (wb.sel_odd_pct <= 100) &&
-            (ser_parity_err_pct <= 100) && (ser_frame_err_pct <= 100) &&
-            (ser_break_pct <= 100) && (ser_stop2_err_pct <= 100) &&
-            (ser_glitch_pct <= 100) && (ser_baud_err_pct <= 100) &&
-            (mdm_toggle_pct <= 100) && (ser_baud_err_max <= 20), "Porcentaje fuera de rango");
-    require((run_ral_reset <= 1) && (bus_timeout_cycles > 0), "Control de reset/timeout invalido");
+    require(sw.service_delay_min <= sw.service_delay_max, "Retraso de servicio: MIN mayor que MAX");
+    require((line.dl_fast_max > 0) && (line.dl_fast_max <= line.dl_max) && (line.dl_max <= 65535), "Rango DL invalido");
+    require(line.dl_zero_pct + line.dl_tail_pct <= 100, "Los porcentajes de DL suman mas de 100");
+    require((line.bc_pct <= 100) && (ctrl.fcr_clear_pct <= 100) && (ctrl.loop_pct <= 100), "Porcentaje de linea o control mayor que 100");
+    require((sw.blind_read_pct <= 100) && (sw.rand_access_pct <= 100) &&
+            (sw.recfg_pct <= 100) && (sw.rst_pct <= 100), "Porcentaje de software mayor que 100");
+    require((wb.sel_odd_pct <= 100) && (mdm_toggle_pct <= 100), "Porcentaje de bus o modem mayor que 100");
+    require((ser_parity_err_pct <= 100) && (ser_frame_err_pct <= 100) && (ser_break_pct <= 100) &&
+            (ser_stop2_err_pct <= 100) && (ser_glitch_pct <= 100) && (ser_baud_err_pct <= 100), "Porcentaje de error serie mayor que 100");
+    require(ser_baud_err_max <= 20, "UART_SER_BAUD_ERR_MAX va de 0 a 20");
+    require((bus_timeout_cycles > 0) && (timeout_cycles > 0), "Los timeouts deben ser positivos");
 
-    //el silencio mas largo (gap_max bits) no puede pasarse del contador de 32 bits del driver serie
-    require(longint'(ser.gap_max) * 16 * line.dl_max <= 32'hffffffff,
-            "GAP_MAX por periodo de bit desborda el contador del driver original");
-    //el tiempo maximo de un acceso tiene que ser mas grande que los retardos mas el saludo con ack
-    require(longint'(wb.delay_max) + wb.stb_delay_max + 16 < bus_timeout_cycles,
-            "BUS_TIMEOUT_CYCLES debe superar los retardos WB mas el handshake");
-
-    //5. Buscamos plusargs +UART_ mal escritos, si no un error de dedo dejaria el valor por defecto sin que nadie se de cuenta
-    command_line = uvm_cmdline_processor::get_inst();
-    void'(command_line.get_plusargs(args)); //args queda con todos los plusargs de la linea de comandos
-    foreach (args[i]) begin
-      if ((args[i].len() >= 6) && (args[i].substr(0, 5) == "+UART_")) begin
-        //buscamos el = (61 es su codigo ASCII)
-        equals = args[i].len();
-        for (int j = 1; j < args[i].len(); j++) begin
-          if (args[i].getc(j) == 61) begin
-            equals = j;
-            break;
-          end
-        end
-        if (equals == args[i].len())
-          `uvm_fatal_context("UART_ARG", {"Se requiere NOMBRE=valor: ", args[i]}, reporter)
-        key = args[i].substr(1, equals - 1);
-        //si el nombre no es uno de los que leimos arriba, esta mal escrito
-        if (!effective.exists(key))
-          `uvm_fatal_context("UART_UNKNOWN_ARG", {"Plusarg desconocido: ", key}, reporter)
-      end
-    end
-    //6. Imprimimos todos los knobs con su valor y su origen, tambien los por defecto
-    //la semilla sola no alcanza para repetir una corrida si los knobs eran otros (regla del enunciado)
-    foreach (effective[name])
-      `uvm_info_context("UART_CFG", $sformatf("%s=%s (%s)", name, effective[name], origin[name]), UVM_LOW, reporter)
-
-    //7. Lista de lo que todavia no esta implementado en E2, si alguno no esta en 0 la prueba se detiene
-    //el archivo plusargs.args los pone en 0, cada linea se quita cuando su soporte este listo
+    //5. Lista de lo que todavia no esta implementado, si alguno no esta en 0 la prueba se detiene
+    //el caso sim/args/base.args los pone en 0, cada linea se quita cuando su soporte este listo (E3)
     unsupported(line.bc_pct, "Break TX");
     unsupported(line.dl_zero_pct, "Trafico con DL=0");
     unsupported(ctrl.loop_pct, "Loopback");
@@ -379,14 +323,7 @@ class uart_env_cfg extends uvm_object;
     unsupported(ser_glitch_pct, "Glitch RX");
     unsupported(ser_baud_err_pct, "Desajuste de baud");
     unsupported(mdm_toggle_pct, "Estimulo modem");
-    require(waive_bugs == "", "En E2 el scoreboard es estricto: usar +UART_SCB_WAIVE_BUGS=");
-
-    //8. Calculamos el tiempo maximo de toda la prueba (watchdog) segun el trafico y los baudios
-    //un tiempo fijo mataria corridas validas con DL grande, por eso crece con la cantidad de caracteres y con dl_max
-    //esto solo corta una corrida que se quedo pegada, no prueba que los tiempos esten bien
-    timeout_cycles = 10000 + 4 * longint'(sw.n_iter) *
-      (longint'(sw.tx_burst_max + ser.burst_max + 64) * 12 * 16 * line.dl_max +
-       longint'(ser.burst_max) * (ser.gap_max + 12 * longint'(sw.service_delay_max)) * 16 * line.dl_max);
+    require(scb.waive_bugs == "", "En E2 el scoreboard es estricto: usar +UART_SCB_WAIVE_BUGS=");
   endfunction
 
   //Elige una opcion segun sus pesos, ej. pesos {1,1,2} dan 25 %, 25 % y 50 %

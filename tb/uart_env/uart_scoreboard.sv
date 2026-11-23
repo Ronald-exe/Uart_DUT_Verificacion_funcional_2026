@@ -130,7 +130,7 @@ class uart_scoreboard extends uvm_scoreboard;
     if (index == 5)
       last_dr = actual[0]; //lectura de LSR: guardamos DR, nos dice si habia dato listo
     //lectura de la direccion 0 con DLAB = 0 es RBR: se compara con el mas viejo de la cola RX
-    if ((index == 0) && !lcr[7]) begin
+    if ((index == 0) && !lcr[7]) begin //¿este acceso fue a THR/RBR?
       if (rx_queue.size() == 0) begin
         //la cola esta vacia: el valor de RBR no esta definido (AMB-11) asi que no se compara
         //pero si el software vio DR = 1 y no habia nada que leer, algo esta mal
@@ -153,7 +153,7 @@ class uart_scoreboard extends uvm_scoreboard;
   //Procesa un caracter que salio por stx: se compara con el primero de la cola TX
   function void observe_tx(ser_item it);
     bit [7:0] expected;
-    if (it.parity_err || it.frame_err)
+    if (it.parity_err || it.frame_err) // error de paridad o el bit de parada llego en 0 cuando debia ser 1
       `uvm_error("SCB_TX_LINE", "El DUT transmitio una trama con error de linea") //el DUT nunca deberia transmitir con error
     //si la cola esta vacia el DUT transmitio algo que nadie escribio en THR
     if (tx_queue.size() == 0) begin

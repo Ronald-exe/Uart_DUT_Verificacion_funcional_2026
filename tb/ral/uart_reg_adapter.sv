@@ -18,6 +18,7 @@ class uart_reg_adapter extends uvm_reg_adapter;
   //reg2bus: traduce un acceso del RAL a un wb_item para el driver
   //uvm_reg_bus_op es lo que manda el RAL: kind (lectura o escritura), addr (numero de registro) y data (el byte)
   //const ref significa que lo recibimos sin copiarlo y sin poder cambiarlo
+  //rw son los datos de acceso que entran
   virtual function uvm_sequence_item reg2bus(const ref uvm_reg_bus_op rw);
     wb_item   it = wb_item::type_id::create("it"); //se crea el item llamando a la fabrica
     bit [4:0] r  = rw.addr[4:0];                     //numero del registro (0 a 7)

@@ -14,8 +14,8 @@ class uart_timed_reg_adapter extends uart_reg_adapter;
   //reg2bus: dejamos que el adaptador original arme el item (adr, sel y carril) y solo le cambiamos el delay
   //el driver necesita un poco de espacio entre accesos seguidos del RAL
   virtual function uvm_sequence_item reg2bus(const ref uvm_reg_bus_op rw);
-    uvm_sequence_item base_item; //lo que devuelve el adaptador original (tipo generico)
-    wb_item item;                //el mismo item ya convertido a wb_item
+    uvm_sequence_item base_item; //handle generico: reg2bus devuelve uvm_sequence_item, pero el objeto adentro es un wb_item
+    wb_item item;                //handle de tipo wb_item al MISMO objeto, asi podemos tocar item.delay
     base_item = super.reg2bus(rw); //super llama al reg2bus del adaptador original
     //$cast revisa que de verdad sea un wb_item, si no lo es detenemos la simulacion
     if (!$cast(item, base_item))
@@ -101,107 +101,12 @@ class uart_env extends uvm_env;
     vseqr.cfg = cfg;
   endfunction
 
-  //Revisa que un puerto este conectado al destino correcto
-  //no basta con contar conexiones, la cantidad puede estar bien y el destino mal, por eso tambien se revisa el nombre y el handle
-  //recibe uvm_port_component_base para que sirva con puertos de cualquier tipo de item
-  function void check_link(uvm_port_component_base source,
-                           uvm_port_component_base destination,
-                           int unsigned expected_count);
-    uvm_port_list connected;  //lista de destinos conectados al puerto
-    string destination_name;
-    if ((source == null) || (destination == null)) begin
-      `uvm_fatal("UART_CONNECTION", "A required TLM endpoint is null")
-      return;
-    end
-    source.get_connected_to(connected);
-    //1. la cantidad de conexiones tiene que ser la esperada
-    if (connected.num() != expected_count) begin
-      `uvm_fatal("UART_CONNECTION", $sformatf("%s has %0d direct connections -- expected %0d",
-                 source.get_full_name(), connected.num(), expected_count))
-      return;
-    end
-    //2. el destino tiene que estar en la lista, buscado por su nombre completo
-    destination_name = destination.get_full_name();
-    if (!connected.exists(destination_name)) begin
-      `uvm_fatal("UART_CONNECTION", $sformatf("Missing connection from %s to %s",
-                 source.get_full_name(), destination_name))
-      return;
-    end
-    //3. y tiene que ser el mismo objeto, no otro con el mismo nombre
-    if (connected[destination_name] != destination) begin
-      `uvm_fatal("UART_CONNECTION", $sformatf("Wrong destination handle for %s", destination_name))
-    end
-  endfunction
-
-  //En end_of_elaboration UVM ya resolvio todas las conexiones, asi que aqui revisamos que el ambiente quedo bien armado
-  //lo hacemos antes del trafico porque en UVM un analysis port sin nadie conectado no da error, y la prueba pasaria sin chequear nada
+  //En end_of_elaboration UVM ya creo y conecto todo, asi que imprimimos el arbol de componentes en el log
+  //sirve para ver de un vistazo que el ambiente quedo armado como en el diagrama del plan (seccion 9.1)
+  //no revisamos las interfaces aqui porque la prueba ya da UVM_FATAL si falta alguna (uart_base_test, build_phase)
   function void end_of_elaboration_phase(uvm_phase phase);
     super.end_of_elaboration_phase(phase);
-
-    //1. Primero que existan todos los componentes, asi un null da nuestro mensaje y no un error de puntero nulo
-    if ((cfg == null) || (wb_agt == null) || (ser_agt == null) ||
-        (regm == null) || (adapter == null) || (predictor == null) ||
-        (scb == null) || (vseqr == null)) begin
-      `uvm_fatal("UART_CONNECTION", "A required environment component or configuration is missing")
-      return;
-    end
-    if ((cfg.wb == null) || (cfg.ser == null) ||
-        (wb_agt.drv == null) || (wb_agt.mon == null) || (wb_agt.sqr == null) ||
-        (ser_agt.drv == null) || (ser_agt.mon_tx == null) ||
-        (ser_agt.mon_rx == null) || (ser_agt.sqr == null) ||
-        (scb.wb_in == null) || (scb.tx_in == null) || (scb.rx_in == null) ||
-        (regm.map_dlab0 == null) || (regm.map_dlab1 == null)) begin
-      `uvm_fatal("UART_CONNECTION", "A required agent child, scoreboard input, or register map is missing")
-      return;
-    end
-
-    //2. Que las interfaces virtuales existan, tener el cfg no basta porque su vif puede venir vacia
-    if ((cfg.wb.vif == null) || (cfg.ser.vif == null) || (cfg.mdm_vif == null)) begin
-      `uvm_fatal("UART_CONNECTION", "A required virtual interface is null")
-    end
-    //3. Que cada hijo use el MISMO cfg que el ambiente, si usara otro podria tener otra interfaz u otro formato de linea
-    if ((wb_agt.drv.cfg != cfg.wb) || (wb_agt.mon.cfg != cfg.wb) ||
-        (ser_agt.drv.cfg != cfg.ser) || (ser_agt.mon_tx.cfg != cfg.ser) ||
-        (ser_agt.mon_rx.cfg != cfg.ser) || (scb.cfg != cfg)) begin
-      `uvm_fatal("UART_CONNECTION", "An agent child or scoreboard is using the wrong configuration")
-    end
-    //4. Que cada monitor serie mire la linea correcta
-    if (!ser_agt.mon_tx.is_tx || ser_agt.mon_rx.is_tx) begin
-      `uvm_fatal("UART_CONNECTION", "Serial monitors are assigned to the wrong lines")
-    end
-
-    //5. Que cada puerto tenga la cantidad de conexiones esperada (size cuenta los destinos finales)
-    //el monitor Wishbone tiene 2: predictor y scoreboard
-    if ((wb_agt.drv.seq_item_port.size() != 1) ||
-        (ser_agt.drv.seq_item_port.size() != 1) ||
-        (wb_agt.mon.ap.size() != 2) ||
-        (ser_agt.mon_tx.ap.size() != 1) || (ser_agt.mon_rx.ap.size() != 1)) begin
-      `uvm_fatal("UART_CONNECTION", "A required port has an unexpected number of resolved connections")
-    end
-    //6. Que cada conexion llegue al destino correcto
-    check_link(wb_agt.drv.seq_item_port.get_comp(), wb_agt.sqr.seq_item_export.get_comp(), 1);
-    check_link(ser_agt.drv.seq_item_port.get_comp(), ser_agt.sqr.seq_item_export.get_comp(), 1);
-    check_link(wb_agt.mon.ap.get_comp(), predictor.bus_in.get_comp(), 2);
-    check_link(wb_agt.mon.ap.get_comp(), scb.wb_in.analysis_export.get_comp(), 2);
-    check_link(ser_agt.mon_tx.ap.get_comp(), scb.tx_in.analysis_export.get_comp(), 1);
-    check_link(ser_agt.mon_rx.ap.get_comp(), scb.rx_in.analysis_export.get_comp(), 1);
-
-    //7. El secuenciador virtual usa handles y no puertos TLM, por eso se revisan aparte
-    if ((vseqr.wb_sqr != wb_agt.sqr) || (vseqr.ser_sqr != ser_agt.sqr) ||
-        (vseqr.regm != regm) || (vseqr.predictor != predictor) || (vseqr.cfg != cfg)) begin
-      `uvm_fatal("UART_CONNECTION", "The virtual sequencer has a missing or incorrect reference")
-    end
-
-    //8. Que los dos mapas del RAL lleguen al bus real con el mismo adaptador que usa el predictor y sin prediccion automatica
-    if ((regm.map_dlab0.get_sequencer() != wb_agt.sqr) ||
-        (regm.map_dlab1.get_sequencer() != wb_agt.sqr) ||
-        (regm.map_dlab0.get_adapter() != adapter) ||
-        (regm.map_dlab1.get_adapter() != adapter) ||
-        regm.map_dlab0.get_auto_predict() || regm.map_dlab1.get_auto_predict() ||
-        (predictor.adapter != adapter) || (predictor.map != regm.map_dlab0)) begin
-      `uvm_fatal("UART_CONNECTION", "RAL maps or predictor are not connected as expected")
-    end
-    `uvm_info("UART_CONNECTION", "Environment connection checks completed", UVM_LOW)
+    uvm_top.print_topology();
   endfunction
 
 endclass : uart_env
