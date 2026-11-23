@@ -85,16 +85,27 @@ module tb_top;
   // ---------------------------------------------------------------------------
   // Aserciones: bind a todas las instancias del módulo uart_top
   // ---------------------------------------------------------------------------
-  bind uart_top uart_wb_sva u_wb_sva (
-    .wb_clk_i (wb_clk_i),
-    .wb_rst_i (wb_rst_i),
-    .wb_adr_i (wb_adr_i),
-    .wb_dat_i (wb_dat_i),
-    .wb_sel_i (wb_sel_i),
-    .wb_we_i  (wb_we_i),
-    .wb_stb_i (wb_stb_i),
-    .wb_cyc_i (wb_cyc_i),
-    .wb_ack_o (wb_ack_o)
+  // Nuestro modulo de aserciones (tb/uart_sva.sv), reemplaza al ejemplo uart_wb_sva (A-WB-01 ya esta adentro)
+  // las senales internas se conectan con su ruta dentro de uart_top: regs.lcr, regs.mcr, ...
+  bind uart_top uart_sva u_sva (
+    .wb_clk_i  (wb_clk_i),
+    .wb_rst_i  (wb_rst_i),
+    .wb_adr_i  (wb_adr_i),
+    .wb_dat_i  (wb_dat_i),
+    .wb_dat_o  (wb_dat_o),
+    .wb_sel_i  (wb_sel_i),
+    .wb_we_i   (wb_we_i),
+    .wb_stb_i  (wb_stb_i),
+    .wb_cyc_i  (wb_cyc_i),
+    .wb_ack_o  (wb_ack_o),
+    .int_o     (int_o),
+    .stx_pad_o (stx_pad_o),
+    .lcr       (regs.lcr),
+    .mcr       (regs.mcr),
+    .msr       (regs.msr),
+    .dl        (regs.dl),
+    .tstate    (regs.tstate),
+    .enable    (regs.enable)
   );
 
   // ---------------------------------------------------------------------------

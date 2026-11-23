@@ -25,7 +25,7 @@
 ../tb/wb_if.sv
 ../tb/uart_ser_if.sv
 ../tb/modem_if.sv
-../tb/uart_wb_sva.sv
+../tb/uart_sva.sv
 
 // ---- Ambiente UVM (agreguen aquí sus paquetes, antes de tb_top) ----
 ../tb/wb_agent/wb_pkg.sv
