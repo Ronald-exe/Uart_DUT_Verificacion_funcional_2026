@@ -36,6 +36,7 @@ class ser_monitor extends uvm_monitor;
     ser_item     it; //handle al item, el objeto se crea con create en cada caracter
     int unsigned b;  //ciclos que dura cada bit
     bit          p;  //bit de paridad que se leyo
+    int unsigned low; //ciclos que la linea lleva en 0, para reconocer un break
 
     forever begin
       //1. Esperamos el inicio: la linea baja a 0. Con DL = 0 no hay baudios y no tiene sentido leer
@@ -66,6 +67,23 @@ class ser_monitor extends uvm_monitor;
       //5. Leemos el bit de parada, si esta en 0 es error de trama (solo se revisa el primero, AMB-08)
       wait_cycles(b);
       it.frame_err = (line() == 1'b0);
+
+      //5b. Break: si el dato y la paridad venian en 0 y la linea sigue en 0, puede ser un break
+      //igual que el DUT, es break si la linea se queda en 0 un caracter completo desde el bit de inicio
+      //lo decidimos un bit antes que el DUT, asi el scoreboard ya tiene el caracter cuando el software lo lea
+      //el DUT guarda el break como un caracter 0 solo con BI (sin PE ni FE, uart_receiver.v linea 402)
+      if (it.frame_err && (it.data == 0) && (!cfg.pen || (p == 1'b0))) begin
+        low = (cfg.n_bits() + cfg.pen + 1) * b + b / 2; //ciclos en 0 desde el inicio hasta la mitad de la parada
+        while ((line() === 1'b0) && (low < cfg.frame_cycles() - b)) begin
+          @(cfg.vif.mon_cb);
+          low++;
+        end
+        if (line() === 1'b0) begin
+          it.brk = 1;
+          it.parity_err = 0;
+          it.frame_err = 0;
+        end
+      end
 
       //6. Publicamos el caracter a todos los conectados (scoreboard) y lo imprimimos con UVM_HIGH
       `uvm_info("SER_MON", $sformatf("%s %s", is_tx ? "TX" : "RX", it.convert2string()), UVM_HIGH)

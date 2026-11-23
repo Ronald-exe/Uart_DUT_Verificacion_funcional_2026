@@ -55,12 +55,28 @@ class ser_driver extends uvm_driver #(ser_item);
     `uvm_info("SER_DRV", it.convert2string(), UVM_HIGH) //Sirve para ver qué carácter mandó el driver justo antes de mandarlo
 
     put_bit(1'b1, it.gap * b);              //1. silencio: gap bits con la linea en 1
+
+    //Break (err_kind = 3): en vez de un caracter dejamos la linea en 0 durante dos caracteres completos
+    //el DUT reconoce el break despues de un caracter en 0 y guarda un solo caracter 0 con BI = 1
+    //despues dejamos un bit en 1 para que el DUT vea que el break termino
+    if (it.err_kind == 3) begin
+      put_bit(1'b0, 2 * cfg.frame_cycles());
+      put_bit(1'b1, b);
+      return;
+    end
+
     put_bit(1'b0, b);                       //2. bit de inicio en 0, le avisa al DUT que viene un caracter
     for (int i = 0; i < cfg.n_bits(); i++)  //3. bits de dato, el LSB primero
       put_bit(it.data[i], b);
-    if (cfg.pen)                            //4. bit de paridad, solo si esta habilitada
-      put_bit(cfg.parity_bit(it.data), b);
-    put_bit(1'b1, cfg.stop_cycles());       //5. bit(s) de parada en 1
+    //4. bit de paridad, solo si esta habilitada
+    //con error de paridad (err_kind = 1) mandamos el bit invertido, ^ es xor: x ^ 1 = no x
+    if (cfg.pen)
+      put_bit(cfg.parity_bit(it.data) ^ (it.err_kind == 1), b);
+    //5. bit(s) de parada en 1
+    //con error de trama (err_kind = 2) el primer bit de parada va en 0 y despues la linea vuelve a 1
+    if (it.err_kind == 2)
+      put_bit(1'b0, b);
+    put_bit(1'b1, cfg.stop_cycles());
   endtask
 
 endclass

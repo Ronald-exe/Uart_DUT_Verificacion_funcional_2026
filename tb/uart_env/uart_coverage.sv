@@ -114,11 +114,12 @@ class uart_coverage extends uvm_component;
       bins fija_1  = {3};
       bins fija_0  = {4};
     }
-    //tipo de error que vio el monitor, break y STOP2 se agregan con la inyeccion de errores
+    //tipo de error que vio el monitor, STOP2 queda pendiente (el DUT lo toma como un bit de inicio nuevo)
     cp_err: coverpoint err {
       bins ninguno = {0};
       bins paridad = {1};
       bins trama   = {2};
+      bins brk     = {3};
     }
     x_par_wls: cross cp_par, cp_wls;
     x_err_stb: cross cp_err, cp_stb;
@@ -190,6 +191,8 @@ class uart_coverage extends uvm_component;
 
   //Traduce las banderas que puso el monitor serie a un numero para cp_err
   function int unsigned error_of(ser_item ch);
+    if (ch.brk)
+      return 3;
     if (ch.parity_err)
       return 1;
     if (ch.frame_err)

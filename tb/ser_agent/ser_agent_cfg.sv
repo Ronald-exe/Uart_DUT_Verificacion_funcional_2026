@@ -61,4 +61,10 @@ class ser_agent_cfg extends uvm_object;
     return 2 * bit_cycles(); //En caso contrario  es el doble de bits para 6,7 y 8
   endfunction
 
+  //Calculamos cuantos ciclos dura un caracter completo: inicio + datos + paridad + parada(s)
+  //lo usan el driver para saber cuanto dura un break y el monitor para reconocerlo
+  function int unsigned frame_cycles();
+    return (1 + n_bits() + pen) * bit_cycles() + stop_cycles();
+  endfunction
+
 endclass

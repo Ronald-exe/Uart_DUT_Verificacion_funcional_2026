@@ -108,9 +108,9 @@ class uart_scoreboard extends uvm_scoreboard;
   //Procesa un caracter que entro por srx
   //lo esperado sale de lo que vio el monitor en la linea y no de lo que se le pidio al driver
   //asi un driver que nunca mando el caracter no puede crear algo esperado falso
+  //un caracter con error de paridad o de trama igual entra a la FIFO con su dato, solo se marca en LSR
+  //un break entra como un caracter 0 (uart_receiver.v linea 402), el monitor ya lo entrega con data = 0
   function void observe_rx(ser_item it);
-    if (it.parity_err || it.frame_err)
-      `uvm_error("SCB_RX_LINE", "El trafico normal RX fue observado con error de linea") //en E2 no se mandan errores
     //la FIFO RX es de 16, si se llena es overrun y eso no se modela en E2
     if (rx_queue.size() >= 16) begin
       `uvm_error("SCB_RX_OVERFLOW", "Overrun fuera del alcance de comparacion de datos E2")

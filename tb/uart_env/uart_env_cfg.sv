@@ -302,6 +302,8 @@ class uart_env_cfg extends uvm_object;
     require((ser_parity_err_pct <= 100) && (ser_frame_err_pct <= 100) && (ser_break_pct <= 100) &&
             (ser_stop2_err_pct <= 100) && (ser_glitch_pct <= 100) && (ser_baud_err_pct <= 100), "Porcentaje de error serie mayor que 100");
     require(ser_baud_err_max <= 20, "UART_SER_BAUD_ERR_MAX va de 0 a 20");
+    //a lo sumo un error por caracter, por eso los porcentajes de error juntos no pueden pasar de 100
+    require(ser_parity_err_pct + ser_frame_err_pct + ser_break_pct <= 100, "Los porcentajes de error serie suman mas de 100");
     require((bus_timeout_cycles > 0) && (timeout_cycles > 0), "Los timeouts deben ser positivos");
 
     //5. Lista de lo que todavia no esta implementado, si alguno no esta en 0 la prueba se detiene
@@ -316,9 +318,6 @@ class uart_env_cfg extends uvm_object;
     unsupported(sw.recfg_pct, "Reconfiguracion durante trafico");
     unsupported(sw.rst_pct, "Reset durante trafico");
     unsupported(wb.sel_odd_pct, "Seleccion WB irregular");
-    unsupported(ser_parity_err_pct, "Inyeccion PE");
-    unsupported(ser_frame_err_pct, "Inyeccion FE");
-    unsupported(ser_break_pct, "Break RX");
     unsupported(ser_stop2_err_pct, "Inyeccion STOP2");
     unsupported(ser_glitch_pct, "Glitch RX");
     unsupported(ser_baud_err_pct, "Desajuste de baud");
