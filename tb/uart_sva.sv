@@ -32,7 +32,9 @@ module uart_sva
   input logic [7:0]                   msr,     //estado del modem, bits 7:4 = DCD, RI, DSR, CTS
   input logic [15:0]                  dl,      //divisor
   input logic [2:0]                   tstate,  //estado del transmisor: 0 reposo, 1 bit de inicio, 2 datos...
-  input logic                         enable   //pulso de baudios (es lo mismo que sale por baud_o)
+  input logic                         enable,  //pulso de baudios (es lo mismo que sale por baud_o)
+  input logic                         lsr_mask,     //1 en el primer ciclo de una lectura de LSR con DLAB = 0 (borra PE, FE, BI, EI)
+  input logic [2:0]                   lsr_err_rise  //{BI, FE, PE}: 1 en el ciclo en que el DUT quiere encender ese bit (flanco)
 );
   `include "uvm_macros.svh"
 
@@ -142,5 +144,10 @@ module uart_sva
   endproperty
   a_baud_01b: assert property (p_baud_01b) else `uvm_error("A-BAUD-01", "Hay pulsos de baudios con DL = 0")
   c_baud_01b: cover property (dl == 0);
+
+  //C-LSR-01 (solo cover, para investigar): el DUT quiere encender PE, FE o BI en el mismo ciclo en que una lectura de LSR los borra
+  //en uart_regs.v el borrado gana (lsr2r <= lsr_mask ? 0 : ...), asi que ese aviso de error se pierde
+  //este numero se compara con los avisos perdidos que cuenta el scoreboard (SCB_LSR_MISS)
+  c_lsr_lost: cover property (lsr_mask && (lsr_err_rise != 3'b000));
 
 endmodule : uart_sva

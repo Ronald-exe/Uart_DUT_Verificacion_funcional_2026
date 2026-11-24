@@ -105,7 +105,10 @@ module tb_top;
     .msr       (regs.msr),
     .dl        (regs.dl),
     .tstate    (regs.tstate),
-    .enable    (regs.enable)
+    .enable    (regs.enable),
+    //para investigar los avisos de error perdidos en LSR: el borrado y el encendido de PE, FE y BI
+    .lsr_mask     (regs.lsr_mask),
+    .lsr_err_rise ({regs.lsr4 & ~regs.lsr4_d, regs.lsr3 & ~regs.lsr3_d, regs.lsr2 & ~regs.lsr2_d})
   );
 
   // ---------------------------------------------------------------------------
