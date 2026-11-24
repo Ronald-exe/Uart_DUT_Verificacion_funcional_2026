@@ -320,7 +320,6 @@ class uart_env_cfg extends uvm_object;
     //el caso sim/args/base.args los pone en 0, cada linea se quita cuando su soporte este listo (E3)
     unsupported(line.bc_pct, "Break TX");
     unsupported(line.dl_zero_pct, "Trafico con DL=0");
-    unsupported(sw.service_delay_max, "Retraso de servicio con posible overrun");
     unsupported(sw.blind_read_pct, "Lecturas ciegas concurrentes con RX");
     unsupported(sw.rand_access_pct, "Accesos de robustez");
     unsupported(sw.recfg_pct, "Reconfiguracion durante trafico");

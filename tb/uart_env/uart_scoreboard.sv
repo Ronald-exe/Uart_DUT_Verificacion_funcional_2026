@@ -33,6 +33,7 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [2:0] rx_flags[$]; //errores de cada caracter de rx_queue, en el mismo orden (el frente es el proximo en leerse)
   bit [2:0] possible;    //errores que LSR puede mostrar en la proxima lectura: los de la FIFO o los que llegaron desde la ultima
   bit [2:0] lsr_seen;    //errores que mostro LSR desde la ultima lectura de RBR
+  bit oe_possible;       //1 si hubo overrun desde la ultima lectura de LSR (OE se puede mostrar)
 
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
@@ -42,6 +43,8 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned empty_reads;   //lecturas de RBR con la FIFO vacia
   longint unsigned lsr_checked;   //lecturas de LSR revisadas
   longint unsigned iir_checked;   //lecturas de IIR revisadas
+  longint unsigned overruns;      //caracteres que llegaron con la FIFO RX llena
+  longint unsigned rx_lost;       //caracteres RX que se perdieron por overrun (no se van a leer)
   longint unsigned err_chars;     //caracteres RX con error que se leyeron de RBR
   longint unsigned err_missed;    //de esos, cuantos LSR nunca marco (chequeo B)
   longint unsigned err_missed_seq;//de los no marcados, cuantos venian justo despues de otro con el mismo error
@@ -142,9 +145,22 @@ class uart_scoreboard extends uvm_scoreboard;
   //un caracter con error de paridad o de trama igual entra a la FIFO con su dato, solo se marca en LSR
   //un break entra como un caracter 0 (uart_receiver.v linea 402), el monitor ya lo entrega con data = 0
   function void observe_rx(ser_item it);
-    //la FIFO RX es de 16, si se llena es overrun y eso no se modela en E2
+    //Overrun: la FIFO RX es de 16, si llega otro caracter con la FIFO llena se pierde uno y LSR marca OE
+    //BUG-04 (AMB-10): la especificacion dice que se pierde el NUEVO y la FIFO queda igual,
+    //pero el DUT escribe el dato nuevo encima del mas viejo (uart_rfifo.v, la memoria se escribe con we(push) aunque este llena)
+    //  - si el BUG-04 esta dispensado seguimos al RTL: el dato del frente se cambia por el nuevo (sus errores quedan igual)
+    //  - si no, seguimos la especificacion: el nuevo se descarta, y al leer RBR el DUT entrega otro dato -> SCB_RX_DATA
     if (rx_queue.size() >= 16) begin
-      `uvm_error("SCB_RX_OVERFLOW", "Overrun fuera del alcance de comparacion de datos E2")
+      overruns++;
+      rx_characters++;
+      rx_lost++;
+      oe_possible = 1;
+      if (cfg.scb.waived(4)) begin
+        `uvm_warning("SCB_OVERRUN", $sformatf("BUG-04 (dispensado): overrun, el dato %02h pisa al mas viejo %02h", character_mask(it.data), rx_queue[0]))
+        rx_queue[0] = character_mask(it.data);
+      end else begin
+        `uvm_info("SCB_OVERRUN", $sformatf("Overrun: segun la especificacion se pierde el dato nuevo %02h", character_mask(it.data)), UVM_LOW)
+      end
       return;
     end
     rx_queue.push_back(character_mask(it.data));
@@ -191,19 +207,20 @@ class uart_scoreboard extends uvm_scoreboard;
 
   //Chequeo A (falso aviso): revisa una lectura de LSR
   //  - si LSR marca PE, FE o BI tiene que existir un caracter con ese error (en la FIFO o que llego desde la ultima lectura)
-  //  - si marca EI (bit 7) tiene que existir algun caracter con error
-  //  - OE (bit 1) tiene que estar en 0, todavia no generamos overrun
+  //  - si marca EI (bit 7) tiene que existir algun caracter con error o un overrun
+  //  - si marca OE (bit 1) tuvo que haber un overrun desde la ultima lectura de LSR
   //despues, si la lectura fue con DLAB = 0, el DUT borra PE, FE, BI y EI (con DLAB = 1 no borra nada, AMB-14)
   function void check_lsr(bit [7:0] lsr);
     lsr_checked++;
     if ((lsr[4:2] & ~possible) != 0)
       `uvm_error("SCB_LSR_FALSE", $sformatf("LSR=%02h marca {BI,FE,PE}=%03b sin un caracter con ese error (posibles=%03b)", lsr, lsr[4:2], possible))
-    if (lsr[7] && (possible == 0))
-      `uvm_error("SCB_LSR_FALSE", $sformatf("LSR=%02h marca EI sin ningun caracter con error", lsr))
-    if (lsr[1])
-      `uvm_error("SCB_LSR_OE", $sformatf("LSR=%02h marca overrun y no se genero ninguno", lsr))
+    if (lsr[7] && (possible == 0) && !oe_possible)
+      `uvm_error("SCB_LSR_FALSE", $sformatf("LSR=%02h marca EI sin ningun caracter con error ni overrun", lsr))
+    if (lsr[1] && !oe_possible)
+      `uvm_error("SCB_LSR_OE", $sformatf("LSR=%02h marca overrun sin que la FIFO RX se llenara", lsr))
     lsr_seen |= lsr[4:2];
     if (!lcr[7]) begin
+      oe_possible = 0; //la lectura borra OE
       //despues de borrar, solo los caracteres que siguen en la FIFO pueden volver a encender un bit
       possible = 0;
       foreach (rx_flags[i])
@@ -260,7 +277,7 @@ class uart_scoreboard extends uvm_scoreboard;
     if (iir[0] == 1'b1)
       return; //no hay interrupcion pendiente, no hay nada que justificar
     case (iir[3:1])
-      3'b011: if (!ier[2] || (possible == 0))
+      3'b011: if (!ier[2] || ((possible == 0) && !oe_possible))
                 `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice error de linea sin IER[2] o sin caracter con error (IER=%04b)", iir, ier))
       3'b010: if (!ier[0] || (rx_queue.size() < trigger_chars()))
                 `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice dato disponible con %0d caracteres y nivel %0d (IER=%04b)", iir, rx_queue.size(), trigger_chars(), ier))
@@ -308,6 +325,7 @@ class uart_scoreboard extends uvm_scoreboard;
         rx_queue.delete();
         rx_flags.delete();
         possible = 0;
+        oe_possible = 0;
         lsr_seen = 0;
         last_flags = 0;
         wb_in.flush();
@@ -363,9 +381,10 @@ class uart_scoreboard extends uvm_scoreboard;
         (wb_in.used() != 0) || (tx_in.used() != 0) || (rx_in.used() != 0))
       `uvm_error("SCB_PENDING", "Quedaron datos sin comparar al terminar")
     //lo que se vio y comparo tiene que dar justo lo que se planeo
+    //los caracteres perdidos por overrun se vieron en la linea pero nunca se leen de RBR, por eso se restan
     if (targets_set && ((tx_writes != target_tx) || (tx_compared != target_tx) ||
-                        (rx_characters != target_rx) || (rx_compared != target_rx)))
-      `uvm_error("SCB_COUNTS", $sformatf("Objetivo TX/RX=%0d/%0d; THR=%0d TX=%0d RX=%0d RBR=%0d", target_tx, target_rx, tx_writes, tx_compared, rx_characters, rx_compared))
+                        (rx_characters != target_rx) || (rx_compared != target_rx - rx_lost)))
+      `uvm_error("SCB_COUNTS", $sformatf("Objetivo TX/RX=%0d/%0d; THR=%0d TX=%0d RX=%0d RBR=%0d perdidos=%0d", target_tx, target_rx, tx_writes, tx_compared, rx_characters, rx_compared, rx_lost))
   endfunction
 
   //En report_phase imprimimos el resumen, es el [SCB_SUMMARY] que aparece al final del log
@@ -374,7 +393,7 @@ class uart_scoreboard extends uvm_scoreboard;
     `uvm_info("SCB_SUMMARY", $sformatf("TX comparados=%0d RX comparados=%0d lecturas vacias=%0d", tx_compared, rx_compared, empty_reads), UVM_LOW)
     `uvm_info("SCB_LSR", $sformatf("LSR revisados=%0d; caracteres con error=%0d, no marcados=%0d (seguidos de otro con el mismo error=%0d)",
               lsr_checked, err_chars, err_missed, err_missed_seq), UVM_LOW)
-    `uvm_info("SCB_INT", $sformatf("IIR revisados=%0d", iir_checked), UVM_LOW)
+    `uvm_info("SCB_INT", $sformatf("IIR revisados=%0d; overruns=%0d", iir_checked, overruns), UVM_LOW)
   endfunction
 
 endclass : uart_scoreboard

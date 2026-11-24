@@ -3,8 +3,8 @@
 //el scoreboard dice si el DUT hizo bien las cosas, la cobertura dice si ya probamos todas las cosas
 //Escucha a los mismos monitores que el scoreboard, asi solo cuenta lo que de verdad paso en el DUT
 //y no lo que la secuencia intento hacer
-//Por ahora tiene 6 covergroups: cg_reg, cg_line_cfg, cg_tx_char, cg_rx_char, cg_lsr y cg_iir
-//cg_fifo, cg_reset y cg_modem se agregan el dia que exista su funcion (overrun, reset, modem)
+//Por ahora tiene 7 covergroups: cg_reg, cg_line_cfg, cg_tx_char, cg_rx_char, cg_lsr, cg_iir y cg_fifo
+//cg_reset y cg_modem se agregan el dia que exista su funcion (reset con trafico, modem)
 //Hereda de uvm_component porque vive toda la simulacion dentro del ambiente, igual que el scoreboard
 class uart_coverage extends uvm_component;
 
@@ -140,6 +140,22 @@ class uart_coverage extends uvm_component;
     x_ei_dlab: cross cp_ei, cp_dlab; //EI leido con DLAB en 0 y en 1 (AMB-14)
   endgroup
 
+  //cg_fifo: se muestrea en cada lectura de LSR, si hubo overrun (OE) y con que nivel de disparo
+  //el plan tambien pide llenar la FIFO TX y limpiar FIFOs con trafico, eso queda para cuando se generen
+  covergroup cg_fifo with function sample(bit oe, bit [1:0] tl);
+    cp_oe: coverpoint oe {
+      bins sin_overrun = {0};
+      bins overrun     = {1};
+    }
+    cp_tl: coverpoint tl {
+      bins uno     = {0};
+      bins cuatro  = {1};
+      bins ocho    = {2};
+      bins catorce = {3};
+    }
+    x_oe_tl: cross cp_oe, cp_tl; //overrun con cada nivel de disparo
+  endgroup
+
   //cg_iir: se muestrea en cada lectura de IIR, que interrupcion reporto el DUT y con que nivel de disparo
   covergroup cg_iir with function sample(bit [3:0] iir, bit [1:0] tl);
     cp_iir_id: coverpoint iir {
@@ -173,6 +189,7 @@ class uart_coverage extends uvm_component;
     cg_rx_char = new();
     cg_lsr = new();
     cg_iir = new();
+    cg_fifo = new();
   endfunction
 
   //En build tomamos la configuracion y creamos los buzones, asi el ambiente los puede conectar en su connect_phase
@@ -252,6 +269,7 @@ class uart_coverage extends uvm_component;
     //3. lecturas de LSR (direccion 5, sirve con DLAB en 0 o en 1)
     else if (addr == 5) begin
       cg_lsr.sample(value, lcr[7]);
+      cg_fifo.sample(value[1], fcr_tl);
     end
     //4. lecturas de IIR (direccion 2)
     else if (addr == 2) begin
@@ -297,9 +315,9 @@ class uart_coverage extends uvm_component;
   //sirve para ver rapido como va sin abrir URG, el numero oficial es el de URG con todas las semillas juntas
   function void report_phase(uvm_phase phase);
     super.report_phase(phase);
-    `uvm_info("COV_SUMMARY", $sformatf("cg_reg=%0.1f%% cg_line_cfg=%0.1f%% cg_tx_char=%0.1f%% cg_rx_char=%0.1f%% cg_lsr=%0.1f%% cg_iir=%0.1f%%",
+    `uvm_info("COV_SUMMARY", $sformatf("cg_reg=%0.1f%% cg_line_cfg=%0.1f%% cg_tx_char=%0.1f%% cg_rx_char=%0.1f%% cg_lsr=%0.1f%% cg_iir=%0.1f%% cg_fifo=%0.1f%%",
               cg_reg.get_coverage(), cg_line_cfg.get_coverage(), cg_tx_char.get_coverage(),
-              cg_rx_char.get_coverage(), cg_lsr.get_coverage(), cg_iir.get_coverage()), UVM_LOW)
+              cg_rx_char.get_coverage(), cg_lsr.get_coverage(), cg_iir.get_coverage(), cg_fifo.get_coverage()), UVM_LOW)
   endfunction
 
 endclass : uart_coverage
