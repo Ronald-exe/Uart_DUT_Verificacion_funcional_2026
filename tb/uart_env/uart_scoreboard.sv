@@ -25,12 +25,23 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [7:0] lcr = 8'h03; //copia de LCR, la direccion 0 solo es THR/RBR cuando DLAB = 0 (si no es DLL)
   bit last_dr;           //ultimo valor de DR (LSR[0]) que leyo el software
 
+  //Modelo de LSR (seccion 10 del plan): errores de cada caracter RX y lo que el DUT puede mostrar
+  //los 3 bits van en el mismo orden que LSR[4:2] = {BI, FE, PE}, asi se comparan directo con la lectura
+  bit [2:0] rx_flags[$]; //errores de cada caracter de rx_queue, en el mismo orden (el frente es el proximo en leerse)
+  bit [2:0] possible;    //errores que LSR puede mostrar en la proxima lectura: los de la FIFO o los que llegaron desde la ultima
+  bit [2:0] lsr_seen;    //errores que mostro LSR desde la ultima lectura de RBR
+
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
   longint unsigned tx_compared;   //caracteres TX comparados
   longint unsigned rx_characters; //caracteres RX vistos en srx
   longint unsigned rx_compared;   //lecturas de RBR comparadas
   longint unsigned empty_reads;   //lecturas de RBR con la FIFO vacia
+  longint unsigned lsr_checked;   //lecturas de LSR revisadas
+  longint unsigned err_chars;     //caracteres RX con error que se leyeron de RBR
+  longint unsigned err_missed;    //de esos, cuantos LSR nunca marco (chequeo B)
+  longint unsigned err_missed_seq;//de los no marcados, cuantos venian justo despues de otro con el mismo error
+  bit [2:0] last_flags;           //errores del ultimo caracter leido de RBR, para el conteo anterior
   longint unsigned target_tx;     //TX que planeo la secuencia
   longint unsigned target_rx;     //RX que planeo la secuencia
   bit targets_set;                //1 cuando la prueba ya nos dio los totales
@@ -98,8 +109,10 @@ class uart_scoreboard extends uvm_scoreboard;
     end else if (index == 2) begin
       //escritura a FCR: si pide limpiar una FIFO, tambien limpiamos su cola
       //solo se usa al configurar, limpiar con trafico necesita un modelo mas completo
-      if (data[1])
+      if (data[1]) begin
         rx_queue.delete();
+        rx_flags.delete();
+      end
       if (data[2])
         tx_queue.delete();
     end
@@ -117,6 +130,9 @@ class uart_scoreboard extends uvm_scoreboard;
       return;
     end
     rx_queue.push_back(character_mask(it.data));
+    //guardamos sus errores en el mismo orden, {BI, FE, PE} igual que LSR[4:2]
+    rx_flags.push_back({it.brk, it.frame_err, it.parity_err});
+    possible |= {it.brk, it.frame_err, it.parity_err};
     rx_characters++;
   endfunction
 
@@ -127,8 +143,10 @@ class uart_scoreboard extends uvm_scoreboard;
     bit [7:0] actual;
     index = index_of(it);
     actual = byte_of(it);
-    if (index == 5)
+    if (index == 5) begin
       last_dr = actual[0]; //lectura de LSR: guardamos DR, nos dice si habia dato listo
+      check_lsr(actual);
+    end
     //lectura de la direccion 0 con DLAB = 0 es RBR: se compara con el mas viejo de la cola RX
     if ((index == 0) && !lcr[7]) begin //¿este acceso fue a THR/RBR?
       if (rx_queue.size() == 0) begin
@@ -140,6 +158,7 @@ class uart_scoreboard extends uvm_scoreboard;
           empty_reads++;
       end else begin
         expected = rx_queue.pop_front(); //pop_front saca el primero de la cola
+        check_missed(rx_flags.pop_front());
         rx_compared++;
         if (actual !== expected)
           `uvm_error("SCB_RX_DATA", $sformatf("RBR esperado=%02h observado=%02h", expected, actual))
@@ -148,6 +167,45 @@ class uart_scoreboard extends uvm_scoreboard;
       end
       last_dr = (rx_queue.size() != 0);
     end
+  endfunction
+
+  //Chequeo A (falso aviso): revisa una lectura de LSR
+  //  - si LSR marca PE, FE o BI tiene que existir un caracter con ese error (en la FIFO o que llego desde la ultima lectura)
+  //  - si marca EI (bit 7) tiene que existir algun caracter con error
+  //  - OE (bit 1) tiene que estar en 0, todavia no generamos overrun
+  //despues, si la lectura fue con DLAB = 0, el DUT borra PE, FE, BI y EI (con DLAB = 1 no borra nada, AMB-14)
+  function void check_lsr(bit [7:0] lsr);
+    lsr_checked++;
+    if ((lsr[4:2] & ~possible) != 0)
+      `uvm_error("SCB_LSR_FALSE", $sformatf("LSR=%02h marca {BI,FE,PE}=%03b sin un caracter con ese error (posibles=%03b)", lsr, lsr[4:2], possible))
+    if (lsr[7] && (possible == 0))
+      `uvm_error("SCB_LSR_FALSE", $sformatf("LSR=%02h marca EI sin ningun caracter con error", lsr))
+    if (lsr[1])
+      `uvm_error("SCB_LSR_OE", $sformatf("LSR=%02h marca overrun y no se genero ninguno", lsr))
+    lsr_seen |= lsr[4:2];
+    if (!lcr[7]) begin
+      //despues de borrar, solo los caracteres que siguen en la FIFO pueden volver a encender un bit
+      possible = 0;
+      foreach (rx_flags[i])
+        possible |= rx_flags[i];
+    end
+  endfunction
+
+  //Chequeo B (aviso perdido): al leer de RBR un caracter con error, LSR lo tuvo que haber marcado antes
+  //el software siempre lee LSR antes de RBR, asi que basta con revisar las lecturas de LSR desde el RBR anterior
+  //por ahora es UVM_WARNING y se cuenta: el DUT enciende los bits solo en el flanco y queremos medir cuantas veces se pierde uno
+  function void check_missed(bit [2:0] flags);
+    if (flags != 0) begin
+      err_chars++;
+      if ((flags & ~lsr_seen) != 0) begin
+        err_missed++;
+        if ((flags & last_flags) != 0)
+          err_missed_seq++;
+        `uvm_warning("SCB_LSR_MISS", $sformatf("Caracter con {BI,FE,PE}=%03b leido de RBR sin que LSR lo marcara (LSR mostro %03b, anterior=%03b)", flags, lsr_seen, last_flags))
+      end
+    end
+    last_flags = flags;
+    lsr_seen = 0;
   endfunction
 
   //Procesa un caracter que salio por stx: se compara con el primero de la cola TX
@@ -182,6 +240,10 @@ class uart_scoreboard extends uvm_scoreboard;
       if (cfg.wb.vif.rst !== 1'b0) begin
         tx_queue.delete();
         rx_queue.delete();
+        rx_flags.delete();
+        possible = 0;
+        lsr_seen = 0;
+        last_flags = 0;
         wb_in.flush();
         tx_in.flush();
         rx_in.flush();
@@ -241,6 +303,8 @@ class uart_scoreboard extends uvm_scoreboard;
   function void report_phase(uvm_phase phase);
     super.report_phase(phase);
     `uvm_info("SCB_SUMMARY", $sformatf("TX comparados=%0d RX comparados=%0d lecturas vacias=%0d", tx_compared, rx_compared, empty_reads), UVM_LOW)
+    `uvm_info("SCB_LSR", $sformatf("LSR revisados=%0d; caracteres con error=%0d, no marcados=%0d (seguidos de otro con el mismo error=%0d)",
+              lsr_checked, err_chars, err_missed, err_missed_seq), UVM_LOW)
   endfunction
 
 endclass : uart_scoreboard
