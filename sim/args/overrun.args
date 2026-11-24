@@ -1,4 +1,4 @@
-// Caso overrun: el software atiende tarde (retraso de servicio de 0 a 20 caracteres, valor del plan) y la FIFO RX se llena
+// Caso overrun (caso de esquina): rafagas RX largas y seguidas con el software atendiendo tarde, asi la FIFO RX (16) se llena
 // Iterations and TX/RX burst sizes use the plan defaults (20 iterations, bursts of 0 to 20)
 // Leave line-format weights unchanged so supported formats can still vary across seeds
 
@@ -14,7 +14,7 @@
 // Use polling because interrupt-driven service is still pending
 // Turn the other software behaviors off explicitly so the run cannot silently skip requested work
 +UART_SW_MODE_WEIGHTS=0,1
-+UART_SW_SERVICE_DELAY_MIN=0
++UART_SW_SERVICE_DELAY_MIN=10
 +UART_SW_SERVICE_DELAY_MAX=20
 +UART_SW_BLIND_READ_PCT=0
 +UART_SW_RAND_ACCESS_PCT=0
@@ -34,3 +34,7 @@
 
 // BUG-04 dispensado: con la FIFO RX llena el DUT pisa el dato mas viejo en vez de perder el nuevo
 +UART_SCB_WAIVE_BUGS=4
+
+// Rafagas RX de 17 a 20 caracteres casi sin silencio entre ellos: con el retraso de servicio la FIFO se llena seguro
++UART_SER_BURST_MIN=17
++UART_SER_GAP_MAX=2
