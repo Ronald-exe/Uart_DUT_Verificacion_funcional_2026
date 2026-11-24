@@ -79,7 +79,7 @@ class uart_sw_cfg extends uvm_object;
   int unsigned rand_access_pct = 5;  //porcentaje de acceso al azar
   int unsigned recfg_pct = 5;        //porcentaje de reconfigurar con trafico
   int unsigned rst_pct = 1;          //porcentaje de reset con trafico
-  //pesos del estilo de servicio: [interrupcion, sondeo], el primero va en 0 hasta que exista el servicio por interrupcion
+  //pesos del estilo de servicio: [interrupcion, sondeo], se elige uno por corrida en program_uart
   int unsigned mode_w[] = '{1,1};
 
   //Se crea el constructor
@@ -320,7 +320,6 @@ class uart_env_cfg extends uvm_object;
     //el caso sim/args/base.args los pone en 0, cada linea se quita cuando su soporte este listo (E3)
     unsupported(line.bc_pct, "Break TX");
     unsupported(line.dl_zero_pct, "Trafico con DL=0");
-    unsupported(sw.mode_w[0], "Servicio por interrupciones");
     unsupported(sw.service_delay_max, "Retraso de servicio con posible overrun");
     unsupported(sw.blind_read_pct, "Lecturas ciegas concurrentes con RX");
     unsupported(sw.rand_access_pct, "Accesos de robustez");

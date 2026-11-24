@@ -163,6 +163,7 @@ class uart_main_vseq extends uvm_sequence;
   bit [7:0] active_lcr;         //formato que se escribio en LCR
   bit [15:0] active_dl;         //divisor que se escribio en DLL y DLM
   bit active_loop;              //1 si se activo loopback (MCR[4])
+  bit active_irq;               //1 si el software atiende RX por interrupcion, 0 si por sondeo
   longint unsigned planned_tx;  //total de escrituras TX planeadas, se le pasa al scoreboard al final
   longint unsigned planned_rx;  //total de caracteres RX planeados
 
@@ -298,6 +299,12 @@ class uart_main_vseq extends uvm_sequence;
     //loopback (MCR[4]) con su porcentaje: lo que se escribe en THR vuelve por adentro del DUT a RBR
     active_loop = ($urandom_range(99, 0) < cfg.ctrl.loop_pct);
     mcr[4] = active_loop;
+    //estilo de servicio con sus pesos [interrupcion, sondeo]
+    //por interrupcion el software solo lee cuando int_o pide atencion, por eso necesita IER[0] (dato disponible y timeout)
+    //si no, los caracteres nunca avisarian y el servicio se quedaria esperando
+    active_irq = (cfg.choose_weight(cfg.sw.mode_w) == 0);
+    if (active_irq)
+      ier[0] = 1;
 
     //5. Escribimos todo con el candado tomado de principio a fin
     //mientras DLAB = 1 la direccion 0 es DLL, si otro acceso se metiera en medio escribiria DLL en vez de THR o RBR
@@ -331,7 +338,7 @@ class uart_main_vseq extends uvm_sequence;
     cfg.ser.eps = active_lcr[4];
     cfg.ser.sp = active_lcr[5];
     cfg.ser.dl = active_dl;
-    `uvm_info("UART_LINE", $sformatf("LCR=%02h DL=%0d loopback=%0d", active_lcr, active_dl, active_loop), UVM_LOW)
+    `uvm_info("UART_LINE", $sformatf("LCR=%02h DL=%0d loopback=%0d interrupcion=%0d IER=%01h", active_lcr, active_dl, active_loop, active_irq, ier[3:0]), UVM_LOW)
   endtask
 
   //Trafico TX: escribe bytes en THR para que el DUT los transmita (el driver serie no maneja stx)
@@ -359,6 +366,54 @@ class uart_main_vseq extends uvm_sequence;
     rx_done = 1;
   endtask
 
+  //Vacia la FIFO RX: lee LSR y, mientras haya dato (DR = LSR[0]), lee RBR
+  //siempre se lee LSR antes de RBR, asi el scoreboard puede revisar los avisos de error (chequeo B)
+  task drain_rx();
+    bit [7:0] lsr;
+    bit [7:0] ignored;
+    do begin
+      access(0, 5, 0, lsr);
+      if (lsr[0])
+        access(0, 0, 0, ignored);
+    end while (lsr[0]);
+  endtask
+
+  //Servicio por interrupcion: el software no pregunta todo el tiempo, espera a que el DUT suba int_o
+  //Pasos:
+  //  1. esperamos int_o = 1, o que ya no vengan mas caracteres (rx_done)
+  //  2. leemos IIR para saber quien pidio atencion (el scoreboard revisa que tenga sentido)
+  //  3. atendemos segun IIR[3:1], cada fuente se limpia con una accion distinta:
+  //       011 error de linea -> leer LSR
+  //       010 dato disponible o 110 timeout -> vaciar la FIFO RX
+  //       001 THR vacio -> leer IIR ya la limpio, no hay que hacer nada mas
+  //       000 modem -> leer MSR
+  //  4. al terminar vaciamos lo que quedo por debajo del nivel de disparo
+  task service_irq();
+    bit [7:0] iir;
+    bit [7:0] ignored;
+    forever begin
+      //1. esperamos ciclo por ciclo a que int_o suba o a que termine el trafico RX
+      while ((cfg.wb.vif.mon_cb.irq !== 1'b1) && !rx_done)
+        @(cfg.wb.vif.mon_cb);
+      if (cfg.wb.vif.mon_cb.irq !== 1'b1)
+        break; //rx_done y nadie pide atencion: terminamos
+      //2. quien pidio atencion
+      access(0, 2, 0, iir);
+      //3. atendemos (si IIR[0] = 1 la interrupcion ya se habia ido y no hacemos nada)
+      if (!iir[0]) begin
+        case (iir[3:1])
+          3'b011: access(0, 5, 0, ignored);  //error de linea: leer LSR la limpia
+          3'b010: drain_rx();                //dato disponible
+          3'b110: drain_rx();                //timeout
+          3'b000: access(0, 6, 0, ignored);  //modem: leer MSR la limpia
+          default: ;                         //THR vacio: ya se limpio al leer IIR
+        endcase
+      end
+    end
+    //4. lo que quedo por debajo del nivel de disparo
+    drain_rx();
+  endtask
+
   //Servicio por sondeo: mientras llegan caracteres, lee LSR y si hay dato (DR = LSR[0]) lo saca de RBR
   //que la FIFO este vacia no basta para terminar, puede venir otro caracter en camino, por eso tambien se espera rx_done
   //el retraso de atencion y las lecturas ciegas estan en 0 en E2 hasta que el scoreboard sepa revisarlos
@@ -366,6 +421,11 @@ class uart_main_vseq extends uvm_sequence;
     bit [7:0] lsr;
     bit [7:0] ignored;
     int unsigned delay_chars; //retraso de atencion en caracteres
+    //si se eligio servicio por interrupcion, ese servicio se encarga de todo
+    if (active_irq) begin
+      service_irq();
+      return;
+    end
     forever begin
       delay_chars = $urandom_range(cfg.sw.service_delay_max, cfg.sw.service_delay_min);
       repeat (longint'(delay_chars) * char_cycles()) @(cfg.wb.vif.drv_cb);

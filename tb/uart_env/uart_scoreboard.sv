@@ -25,6 +25,8 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [7:0] lcr = 8'h03; //copia de LCR, la direccion 0 solo es THR/RBR cuando DLAB = 0 (si no es DLL)
   bit last_dr;           //ultimo valor de DR (LSR[0]) que leyo el software
   bit loop;              //copia de MCR[4]: en loopback lo que se escribe en THR vuelve a RBR y no sale por stx
+  bit [3:0] ier;         //copia de IER: que interrupciones estan habilitadas
+  bit [1:0] fcr_tl = 2'b11; //copia de FCR[7:6], el nivel de disparo (reset = 14 caracteres)
 
   //Modelo de LSR (seccion 10 del plan): errores de cada caracter RX y lo que el DUT puede mostrar
   //los 3 bits van en el mismo orden que LSR[4:2] = {BI, FE, PE}, asi se comparan directo con la lectura
@@ -39,6 +41,7 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned rx_compared;   //lecturas de RBR comparadas
   longint unsigned empty_reads;   //lecturas de RBR con la FIFO vacia
   longint unsigned lsr_checked;   //lecturas de LSR revisadas
+  longint unsigned iir_checked;   //lecturas de IIR revisadas
   longint unsigned err_chars;     //caracteres RX con error que se leyeron de RBR
   longint unsigned err_missed;    //de esos, cuantos LSR nunca marco (chequeo B)
   longint unsigned err_missed_seq;//de los no marcados, cuantos venian justo despues de otro con el mismo error
@@ -102,6 +105,9 @@ class uart_scoreboard extends uvm_scoreboard;
     //escritura a MCR: guardamos el bit de loopback
     else if (index == 4)
       loop = data[4];
+    //escritura a IER (direccion 1 con DLAB = 0): guardamos que interrupciones estan habilitadas
+    else if ((index == 1) && !lcr[7])
+      ier = data[3:0];
     //Loopback: una escritura a THR (direccion 0 con DLAB = 0) vuelve por adentro a la FIFO RX
     //se espera leerla de RBR igual que un caracter que entro por srx, sin errores de linea
     else if ((index == 0) && !lcr[7] && loop) begin
@@ -118,8 +124,9 @@ class uart_scoreboard extends uvm_scoreboard;
       if (tx_queue.size() > 17)
         `uvm_error("SCB_TX_OVERFLOW", "Trafico fuera del modelo de datos normal E2")
     end else if (index == 2) begin
-      //escritura a FCR: si pide limpiar una FIFO, tambien limpiamos su cola
+      //escritura a FCR: guardamos el nivel de disparo y si pide limpiar una FIFO, tambien limpiamos su cola
       //solo se usa al configurar, limpiar con trafico necesita un modelo mas completo
+      fcr_tl = data[7:6];
       if (data[1]) begin
         rx_queue.delete();
         rx_flags.delete();
@@ -158,6 +165,8 @@ class uart_scoreboard extends uvm_scoreboard;
       last_dr = actual[0]; //lectura de LSR: guardamos DR, nos dice si habia dato listo
       check_lsr(actual);
     end
+    if (index == 2)
+      check_iir(actual); //lectura de IIR: revisamos que la interrupcion que reporta tenga sentido
     //lectura de la direccion 0 con DLAB = 0 es RBR: se compara con el mas viejo de la cola RX
     if ((index == 0) && !lcr[7]) begin //¿este acceso fue a THR/RBR?
       if (rx_queue.size() == 0) begin
@@ -224,6 +233,47 @@ class uart_scoreboard extends uvm_scoreboard;
     lsr_seen = 0;
   endfunction
 
+  //Traduce FCR[7:6] a cuantos caracteres tiene que juntar la FIFO RX para la interrupcion de dato disponible
+  function int unsigned trigger_chars();
+    case (fcr_tl)
+      2'b00: return 1;
+      2'b01: return 4;
+      2'b10: return 8;
+      default: return 14;
+    endcase
+  endfunction
+
+  //Modelo de interrupciones (seccion 10 del plan): revisa una lectura de IIR
+  //IIR[0] = 0 significa que hay una interrupcion pendiente y IIR[3:1] dice cual (la de mayor prioridad)
+  //predecir el ciclo exacto en que se enciende cada una es muy dificil, por eso revisamos que lo que dice IIR
+  //este JUSTIFICADO por el modelo (igual que el chequeo A de LSR):
+  //  011 error de linea (RLS) -> IER[2] = 1 y hay algun caracter con error que LSR puede mostrar
+  //  010 dato disponible (RDA) -> IER[0] = 1 y la FIFO RX tiene al menos el nivel de disparo
+  //  110 timeout (TI)          -> IER[0] = 1 y la FIFO RX tiene algun dato
+  //  001 THR vacio (THRE)      -> IER[1] = 1
+  //  000 modem (MS)            -> IER[3] = 1
+  //ademas IIR[7:4] siempre vale 1100 (el UART siempre trabaja con FIFO, AMB-17)
+  function void check_iir(bit [7:0] iir);
+    iir_checked++;
+    if (iir[7:4] != 4'hC)
+      `uvm_error("SCB_IIR", $sformatf("IIR=%02h: los bits 7:4 tienen que ser 1100", iir))
+    if (iir[0] == 1'b1)
+      return; //no hay interrupcion pendiente, no hay nada que justificar
+    case (iir[3:1])
+      3'b011: if (!ier[2] || (possible == 0))
+                `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice error de linea sin IER[2] o sin caracter con error (IER=%04b)", iir, ier))
+      3'b010: if (!ier[0] || (rx_queue.size() < trigger_chars()))
+                `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice dato disponible con %0d caracteres y nivel %0d (IER=%04b)", iir, rx_queue.size(), trigger_chars(), ier))
+      3'b110: if (!ier[0] || (rx_queue.size() == 0))
+                `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice timeout sin datos en la FIFO RX (IER=%04b)", iir, ier))
+      3'b001: if (!ier[1])
+                `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice THR vacio sin IER[1]", iir))
+      3'b000: if (!ier[3])
+                `uvm_error("SCB_IIR", $sformatf("IIR=%02h dice modem sin IER[3]", iir))
+      default: `uvm_error("SCB_IIR", $sformatf("IIR=%02h tiene un codigo de interrupcion que no existe", iir))
+    endcase
+  endfunction
+
   //Procesa un caracter que salio por stx: se compara con el primero de la cola TX
   function void observe_tx(ser_item it);
     bit [7:0] expected;
@@ -265,6 +315,8 @@ class uart_scoreboard extends uvm_scoreboard;
         rx_in.flush();
         lcr = 8'h03;
         loop = 0;
+        ier = 0;
+        fcr_tl = 2'b11;
         last_dr = 0;
         continue;
       end
@@ -322,6 +374,7 @@ class uart_scoreboard extends uvm_scoreboard;
     `uvm_info("SCB_SUMMARY", $sformatf("TX comparados=%0d RX comparados=%0d lecturas vacias=%0d", tx_compared, rx_compared, empty_reads), UVM_LOW)
     `uvm_info("SCB_LSR", $sformatf("LSR revisados=%0d; caracteres con error=%0d, no marcados=%0d (seguidos de otro con el mismo error=%0d)",
               lsr_checked, err_chars, err_missed, err_missed_seq), UVM_LOW)
+    `uvm_info("SCB_INT", $sformatf("IIR revisados=%0d", iir_checked), UVM_LOW)
   endfunction
 
 endclass : uart_scoreboard

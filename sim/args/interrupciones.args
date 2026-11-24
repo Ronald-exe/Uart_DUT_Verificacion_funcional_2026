@@ -1,0 +1,36 @@
+// Caso interrupciones: el software atiende RX por interrupcion (int_o + IIR) y hay errores de linea para que salte la de error de linea
+// Iterations and TX/RX burst sizes use the plan defaults (20 iterations, bursts of 0 to 20)
+// Leave line-format weights unchanged so supported formats can still vary across seeds
+
+// Keep the baud rate fast here so the first integration run does not spend most of its time waiting
+// Disable break and loopback until their stimulus and checking are ready
++UART_LCR_DL_ZERO_PCT=0
++UART_LCR_DL_FAST_MAX=8
++UART_LCR_DL_MAX=8
++UART_LCR_DL_TAIL_PCT=0
++UART_LCR_BC_PCT=0
++UART_MCR_LOOP_PCT=0
+
+// Use polling because interrupt-driven service is still pending
+// Turn the other software behaviors off explicitly so the run cannot silently skip requested work
++UART_SW_MODE_WEIGHTS=1,0
++UART_SW_SERVICE_DELAY_MIN=0
++UART_SW_SERVICE_DELAY_MAX=0
++UART_SW_BLIND_READ_PCT=0
++UART_SW_RAND_ACCESS_PCT=0
++UART_SW_RECFG_PCT=0
++UART_SW_RST_PCT=0
+
+// Use regular byte selection and normal serial frames for this stage
+// Leave error injection and modem changes off until those paths have real implementations
++UART_WB_SEL_ODD_PCT=0
++UART_SER_PARITY_ERR_PCT=5
++UART_SER_FRAME_ERR_PCT=5
++UART_SER_BREAK_PCT=3
++UART_SER_STOP2_ERR_PCT=0
++UART_SER_GLITCH_PCT=0
++UART_SER_BAUD_ERR_PCT=0
++UART_MDM_TOGGLE_PCT=0
+
+// BUG-06 dispensado: con errores en RX y sondeo rapido de LSR el DUT pierde algunos avisos de error (ver uart_scoreboard)
++UART_SCB_WAIVE_BUGS=6

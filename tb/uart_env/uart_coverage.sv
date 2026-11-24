@@ -3,8 +3,8 @@
 //el scoreboard dice si el DUT hizo bien las cosas, la cobertura dice si ya probamos todas las cosas
 //Escucha a los mismos monitores que el scoreboard, asi solo cuenta lo que de verdad paso en el DUT
 //y no lo que la secuencia intento hacer
-//Por ahora tiene 5 covergroups: cg_reg, cg_line_cfg, cg_tx_char, cg_rx_char y cg_lsr
-//cg_fifo, cg_iir, cg_reset y cg_modem se agregan el dia que exista su funcion (errores, interrupciones, modem, reset)
+//Por ahora tiene 6 covergroups: cg_reg, cg_line_cfg, cg_tx_char, cg_rx_char, cg_lsr y cg_iir
+//cg_fifo, cg_reset y cg_modem se agregan el dia que exista su funcion (overrun, reset, modem)
 //Hereda de uvm_component porque vive toda la simulacion dentro del ambiente, igual que el scoreboard
 class uart_coverage extends uvm_component;
 
@@ -23,6 +23,7 @@ class uart_coverage extends uvm_component;
   bit [7:0] lcr = 8'h03;     //valor de reset de LCR (8 bits, 1 parada, sin paridad)
   bit [7:0] dll = 8'h00;     //parte baja del divisor
   bit [7:0] dlm = 8'h00;     //parte alta del divisor
+  bit [1:0] fcr_tl = 2'b11;  //copia de FCR[7:6], el nivel de disparo (reset = 14)
   int unsigned idle_cycles;  //ciclos libres (cyc = 0) desde el ultimo acceso, para cp_gap
 
   //cg_reg: se muestrea en cada acceso Wishbone
@@ -139,6 +140,29 @@ class uart_coverage extends uvm_component;
     x_ei_dlab: cross cp_ei, cp_dlab; //EI leido con DLAB en 0 y en 1 (AMB-14)
   endgroup
 
+  //cg_iir: se muestrea en cada lectura de IIR, que interrupcion reporto el DUT y con que nivel de disparo
+  covergroup cg_iir with function sample(bit [3:0] iir, bit [1:0] tl);
+    cp_iir_id: coverpoint iir {
+      bins rls     = {4'b0110};  //IIR[3:1] = 011 y IIR[0] = 0: error de linea
+      bins rda     = {4'b0100};  //010: dato disponible
+      bins timeout = {4'b1100};  //110: timeout
+      bins thre    = {4'b0010};  //001: THR vacio
+      bins ms      = {4'b0000};  //000: modem
+      bins ninguna = {4'b0001};  //IIR[0] = 1: no hay nada pendiente
+    }
+    cp_tl: coverpoint tl {
+      bins uno      = {0};
+      bins cuatro   = {1};
+      bins ocho     = {2};
+      bins catorce  = {3};
+    }
+    //el nivel de disparo solo cambia cuando salta dato disponible o timeout, por eso el cruce ignora las otras
+    x_iir_tl: cross cp_iir_id, cp_tl {
+      ignore_bins otras = binsof(cp_iir_id.rls) || binsof(cp_iir_id.thre) ||
+                          binsof(cp_iir_id.ms) || binsof(cp_iir_id.ninguna);
+    }
+  endgroup
+
   //Se crea el constructor, parent es el ambiente
   //los covergroups se crean aqui con new, si no se crean no cuentan nada
   function new(string name = "uart_coverage", uvm_component parent = null);
@@ -148,6 +172,7 @@ class uart_coverage extends uvm_component;
     cg_tx_char = new();
     cg_rx_char = new();
     cg_lsr = new();
+    cg_iir = new();
   endfunction
 
   //En build tomamos la configuracion y creamos los buzones, asi el ambiente los puede conectar en su connect_phase
@@ -220,11 +245,17 @@ class uart_coverage extends uvm_component;
         dll = value; //direccion 0 con DLAB = 1 es DLL
       end else if ((addr == 1) && lcr[7]) begin
         dlm = value; //direccion 1 con DLAB = 1 es DLM
+      end else if (addr == 2) begin
+        fcr_tl = value[7:6]; //escritura a FCR: guardamos el nivel de disparo
       end
     end
     //3. lecturas de LSR (direccion 5, sirve con DLAB en 0 o en 1)
     else if (addr == 5) begin
       cg_lsr.sample(value, lcr[7]);
+    end
+    //4. lecturas de IIR (direccion 2)
+    else if (addr == 2) begin
+      cg_iir.sample(value[3:0], fcr_tl);
     end
   endfunction
 
@@ -241,6 +272,7 @@ class uart_coverage extends uvm_component;
         lcr = 8'h03;
         dll = 8'h00;
         dlm = 8'h00;
+        fcr_tl = 2'b11;
         idle_cycles = 0;
         wb_in.flush();
         tx_in.flush();
@@ -265,9 +297,9 @@ class uart_coverage extends uvm_component;
   //sirve para ver rapido como va sin abrir URG, el numero oficial es el de URG con todas las semillas juntas
   function void report_phase(uvm_phase phase);
     super.report_phase(phase);
-    `uvm_info("COV_SUMMARY", $sformatf("cg_reg=%0.1f%% cg_line_cfg=%0.1f%% cg_tx_char=%0.1f%% cg_rx_char=%0.1f%% cg_lsr=%0.1f%%",
+    `uvm_info("COV_SUMMARY", $sformatf("cg_reg=%0.1f%% cg_line_cfg=%0.1f%% cg_tx_char=%0.1f%% cg_rx_char=%0.1f%% cg_lsr=%0.1f%% cg_iir=%0.1f%%",
               cg_reg.get_coverage(), cg_line_cfg.get_coverage(), cg_tx_char.get_coverage(),
-              cg_rx_char.get_coverage(), cg_lsr.get_coverage()), UVM_LOW)
+              cg_rx_char.get_coverage(), cg_lsr.get_coverage(), cg_iir.get_coverage()), UVM_LOW)
   endfunction
 
 endclass : uart_coverage
