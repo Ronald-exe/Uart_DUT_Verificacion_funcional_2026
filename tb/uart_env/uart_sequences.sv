@@ -162,6 +162,7 @@ class uart_main_vseq extends uvm_sequence;
   bit rx_done;                  //1 cuando ya se mandaron todos los caracteres RX de la iteracion
   bit [7:0] active_lcr;         //formato que se escribio en LCR
   bit [15:0] active_dl;         //divisor que se escribio en DLL y DLM
+  bit active_loop;              //1 si se activo loopback (MCR[4])
   longint unsigned planned_tx;  //total de escrituras TX planeadas, se le pasa al scoreboard al final
   longint unsigned planned_rx;  //total de caracteres RX planeados
 
@@ -294,6 +295,9 @@ class uart_main_vseq extends uvm_sequence;
       ier[i] = ($urandom_range(99, 0) < cfg.ctrl.ier_bit_pct[i]);
       mcr[i] = ($urandom_range(99, 0) < cfg.ctrl.mcr_bit_pct[i]);
     end
+    //loopback (MCR[4]) con su porcentaje: lo que se escribe en THR vuelve por adentro del DUT a RBR
+    active_loop = ($urandom_range(99, 0) < cfg.ctrl.loop_pct);
+    mcr[4] = active_loop;
 
     //5. Escribimos todo con el candado tomado de principio a fin
     //mientras DLAB = 1 la direccion 0 es DLL, si otro acceso se metiera en medio escribiria DLL en vez de THR o RBR
@@ -327,7 +331,7 @@ class uart_main_vseq extends uvm_sequence;
     cfg.ser.eps = active_lcr[4];
     cfg.ser.sp = active_lcr[5];
     cfg.ser.dl = active_dl;
-    `uvm_info("UART_LINE", $sformatf("LCR=%02h DL=%0d", active_lcr, active_dl), UVM_LOW)
+    `uvm_info("UART_LINE", $sformatf("LCR=%02h DL=%0d loopback=%0d", active_lcr, active_dl, active_loop), UVM_LOW)
   endtask
 
   //Trafico TX: escribe bytes en THR para que el DUT los transmita (el driver serie no maneja stx)
@@ -377,9 +381,17 @@ class uart_main_vseq extends uvm_sequence;
     end
   endtask
 
+  //Espera TEMT (LSR[6]): la FIFO TX y el registro de corrimiento vacios
+  //no basta con la ultima escritura a THR, la FIFO puede estar vacia mientras todavia sale el ultimo caracter
+  task wait_temt();
+    bit [7:0] lsr;
+    do begin
+      access(0, 5, 0, lsr);
+    end while (!lsr[6]);
+  endtask
+
   //body es el flujo completo de la prueba
   task body();
-    bit [7:0] lsr;
     int unsigned tx_count;
     int unsigned rx_count;
     cfg = p_sequencer.cfg;
@@ -397,23 +409,36 @@ class uart_main_vseq extends uvm_sequence;
       //se sortea cuanto TX y cuanto RX en cada iteracion, asi con MIN = MAX tambien funciona sin un caso especial
       tx_count = $urandom_range(cfg.sw.tx_burst_max, cfg.sw.tx_burst_min);
       rx_count = $urandom_range(cfg.ser.burst_max, cfg.ser.burst_min);
-      planned_tx += tx_count;
-      planned_rx += rx_count;
       rx_done = 0;
-      `uvm_info("UART_BURST", $sformatf("Objetivo TX=%0d RX=%0d", tx_count, rx_count), UVM_MEDIUM)
-      //TX, RX y el servicio corren en paralelo porque el UART puede mandar y recibir al mismo tiempo
-      //solo los accesos al bus Wishbone se turnan (con el candado), la linea serie corre sola
-      //join espera a que terminen los tres
-      fork
-        send_tx(tx_count);
-        send_rx(rx_count);
-        service_rx();
-      join
-      //esperamos TEMT (LSR[6]) y no solo la ultima escritura a THR
-      //la FIFO puede estar vacia mientras el registro de corrimiento todavia manda el ultimo caracter
-      do begin
-        access(0, 5, 0, lsr);
-      end while (!lsr[6]);
+      if (!active_loop) begin
+        //Modo normal: TX, RX y el servicio corren en paralelo porque el UART puede mandar y recibir al mismo tiempo
+        //solo los accesos al bus Wishbone se turnan (con el candado), la linea serie corre sola
+        //join espera a que terminen los tres
+        planned_tx += tx_count;
+        planned_rx += rx_count;
+        `uvm_info("UART_BURST", $sformatf("Objetivo TX=%0d RX=%0d", tx_count, rx_count), UVM_MEDIUM)
+        fork
+          send_tx(tx_count);
+          send_rx(rx_count);
+          service_rx();
+        join
+      end else begin
+        //Loopback: lo que se escribe en THR vuelve por adentro a RBR, por eso cuenta como RX y no como TX
+        //el agente serie no manda nada, en loopback el DUT ignora srx
+        //el servicio termina cuando el transmisor quedo vacio (TEMT) y paso el ultimo caracter (2 bits de margen)
+        planned_rx += tx_count;
+        `uvm_info("UART_BURST", $sformatf("Objetivo loopback=%0d", tx_count), UVM_MEDIUM)
+        fork
+          begin
+            send_tx(tx_count);
+            wait_temt();
+            repeat (2 * cfg.ser.bit_cycles()) @(cfg.ser.vif.mon_cb);
+            rx_done = 1;
+          end
+          service_rx();
+        join
+      end
+      wait_temt();
       repeat (3) @(cfg.wb.vif.drv_cb);
     end
   endtask

@@ -24,6 +24,7 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [7:0] rx_queue[$]; //caracteres que entraron por srx y todavia no se han leido de RBR
   bit [7:0] lcr = 8'h03; //copia de LCR, la direccion 0 solo es THR/RBR cuando DLAB = 0 (si no es DLL)
   bit last_dr;           //ultimo valor de DR (LSR[0]) que leyo el software
+  bit loop;              //copia de MCR[4]: en loopback lo que se escribe en THR vuelve a RBR y no sale por stx
 
   //Modelo de LSR (seccion 10 del plan): errores de cada caracter RX y lo que el DUT puede mostrar
   //los 3 bits van en el mismo orden que LSR[4:2] = {BI, FE, PE}, asi se comparan directo con la lectura
@@ -98,6 +99,16 @@ class uart_scoreboard extends uvm_scoreboard;
     data = byte_of(it);
     if (index == 3)
       lcr = data; //escritura a LCR: guardamos la copia
+    //escritura a MCR: guardamos el bit de loopback
+    else if (index == 4)
+      loop = data[4];
+    //Loopback: una escritura a THR (direccion 0 con DLAB = 0) vuelve por adentro a la FIFO RX
+    //se espera leerla de RBR igual que un caracter que entro por srx, sin errores de linea
+    else if ((index == 0) && !lcr[7] && loop) begin
+      rx_queue.push_back(character_mask(data));
+      rx_flags.push_back(3'b000);
+      rx_characters++;
+    end
     //escritura a la direccion 0 con DLAB = 0 es THR: el byte va a la cola TX
     //con DLAB = 1 es DLL, por eso se revisa lcr[7], si no el divisor pareceria un dato TX
     else if ((index == 0) && !lcr[7]) begin
@@ -253,6 +264,7 @@ class uart_scoreboard extends uvm_scoreboard;
         tx_in.flush();
         rx_in.flush();
         lcr = 8'h03;
+        loop = 0;
         last_dr = 0;
         continue;
       end
