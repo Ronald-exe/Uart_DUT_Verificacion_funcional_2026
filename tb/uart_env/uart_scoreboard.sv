@@ -193,7 +193,9 @@ class uart_scoreboard extends uvm_scoreboard;
 
   //Chequeo B (aviso perdido): al leer de RBR un caracter con error, LSR lo tuvo que haber marcado antes
   //el software siempre lee LSR antes de RBR, asi que basta con revisar las lecturas de LSR desde el RBR anterior
-  //por ahora es UVM_WARNING y se cuenta: el DUT enciende los bits solo en el flanco y queremos medir cuantas veces se pierde uno
+  //BUG-06: en el DUT, si una lectura de LSR empieza en el mismo ciclo en que llega el caracter con error,
+  //el borrado gana y el aviso se pierde (uart_regs.v lineas 634, 645 y 656). Se confirmo con el cover c_lsr_lost de uart_sva
+  //si el BUG-06 esta dispensado es UVM_WARNING, si no es UVM_ERROR
   function void check_missed(bit [2:0] flags);
     if (flags != 0) begin
       err_chars++;
@@ -201,7 +203,10 @@ class uart_scoreboard extends uvm_scoreboard;
         err_missed++;
         if ((flags & last_flags) != 0)
           err_missed_seq++;
-        `uvm_warning("SCB_LSR_MISS", $sformatf("Caracter con {BI,FE,PE}=%03b leido de RBR sin que LSR lo marcara (LSR mostro %03b, anterior=%03b)", flags, lsr_seen, last_flags))
+        if (cfg.scb.waived(6))
+          `uvm_warning("SCB_LSR_MISS", $sformatf("BUG-06 (dispensado): caracter con {BI,FE,PE}=%03b leido de RBR sin que LSR lo marcara", flags))
+        else
+          `uvm_error("SCB_LSR_MISS", $sformatf("BUG-06: caracter con {BI,FE,PE}=%03b leido de RBR sin que LSR lo marcara", flags))
       end
     end
     last_flags = flags;

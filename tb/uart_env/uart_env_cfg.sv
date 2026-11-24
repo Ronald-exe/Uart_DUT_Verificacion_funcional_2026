@@ -95,13 +95,23 @@ class uart_scb_cfg extends uvm_object;
   //Registramos en la fabrica
   `uvm_object_utils(uart_scb_cfg)
 
-  //Lista de BUG dispensados del plan (BUG-01 a BUG-05), los de la lista se reportan como aviso y no como error
-  //en E2 el scoreboard todavia no la usa y es estricto, por eso se pide vacia
-  string waive_bugs = "1,2,3,4,5";
+  //Lista de BUG dispensados (BUG-01 a BUG-06), los de la lista se reportan como UVM_WARNING y no como UVM_ERROR
+  //asi una regresion puede pasar aunque el DUT tenga errores conocidos, y con la lista vacia se reproduce cada BUG
+  string waive_bugs = "1,2,3,4,5,6";
 
   //Se crea el constructor
   function new(string name = "uart_scb_cfg");
     super.new(name);
+  endfunction
+
+  //Dice si el BUG numero n esta en la lista, ej. con "1,6" waived(6) da 1 y waived(2) da 0
+  //los BUG van del 1 al 6, asi que basta con buscar el digito letra por letra
+  function bit waived(int unsigned n);
+    for (int i = 0; i < waive_bugs.len(); i++) begin
+      if (waive_bugs.substr(i, i) == $sformatf("%0d", n))
+        return 1;
+    end
+    return 0;
   endfunction
 
 endclass : uart_scb_cfg
@@ -322,7 +332,6 @@ class uart_env_cfg extends uvm_object;
     unsupported(ser_glitch_pct, "Glitch RX");
     unsupported(ser_baud_err_pct, "Desajuste de baud");
     unsupported(mdm_toggle_pct, "Estimulo modem");
-    require(scb.waive_bugs == "", "En E2 el scoreboard es estricto: usar +UART_SCB_WAIVE_BUGS=");
   endfunction
 
   //Elige una opcion segun sus pesos, ej. pesos {1,1,2} dan 25 %, 25 % y 50 %
