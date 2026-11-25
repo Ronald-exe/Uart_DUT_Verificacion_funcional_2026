@@ -1,0 +1,36 @@
+//Caso modem: igual que el caso base pero con cambios en CTS, DSR, RI y DCD (valor del plan, seccion 7)
+//Usamos los valores del plan: 20 iteraciones y rafagas TX y RX de 0 a 20
+//El formato de linea sigue variando entre semillas con los pesos por defecto
+
+//Dejamos los baudios rapidos para probar los cambios de modem sin esperas largas
+//Este caso usa trafico normal, sin break TX ni loopback
++UART_LCR_DL_ZERO_PCT=0
++UART_LCR_DL_FAST_MAX=8
++UART_LCR_DL_MAX=8
++UART_LCR_DL_TAIL_PCT=0
++UART_LCR_BC_PCT=0
++UART_MCR_LOOP_PCT=0
+
+//Usamos sondeo para que este caso pruebe el agente sin depender del servicio de interrupciones
+//Los otros estimulos del software quedan apagados igual que en el caso base
++UART_SW_MODE_WEIGHTS=0,1
++UART_SW_SERVICE_DELAY_MIN=0
++UART_SW_SERVICE_DELAY_MAX=0
++UART_SW_BLIND_READ_PCT=0
++UART_SW_RAND_ACCESS_PCT=0
++UART_SW_RECFG_PCT=0
++UART_SW_RST_PCT=0
+
+//Los accesos usan seleccion de byte normal y las tramas no llevan errores inyectados
+//Solo habilitamos los cambios de las cuatro entradas de modem
++UART_WB_SEL_ODD_PCT=0
++UART_SER_PARITY_ERR_PCT=0
++UART_SER_FRAME_ERR_PCT=0
++UART_SER_BREAK_PCT=0
++UART_SER_STOP2_ERR_PCT=0
++UART_SER_GLITCH_PCT=0
++UART_SER_BAUD_ERR_PCT=0
++UART_MDM_TOGGLE_PCT=20
+
+//La lista vacia mantiene estrictos los chequeos del scoreboard
++UART_SCB_WAIVE_BUGS=
