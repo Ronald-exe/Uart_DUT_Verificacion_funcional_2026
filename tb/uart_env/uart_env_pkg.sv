@@ -5,6 +5,7 @@ package uart_env_pkg;
   import uvm_pkg::*;   //importamos las clases de UVM
   import wb_pkg::*;    //importamos el agente Wishbone (wb_item, wb_agent, ...)
   import ser_pkg::*;   //importamos el agente serie (ser_item, ser_agent, ...)
+  import modem_pkg::*; //importamos los items, componentes y secuencia de modem
   import ral_pkg::*;   //importamos el RAL (uart_reg_block, uart_reg_adapter)
   `include "uvm_macros.svh" //incluimos las macros de UVM
   //El orden importa: cada clase tiene que ir despues de las clases que usa

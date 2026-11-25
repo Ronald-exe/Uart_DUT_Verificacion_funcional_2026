@@ -441,6 +441,18 @@ class uart_main_vseq extends uvm_sequence;
     end
   endtask
 
+  //Trafico de modem: arranca modem_toggle_seq en el secuenciador del agente de modem
+  //Con toggle_pct = 0 no hace nada, asi el caso base queda igual
+  task send_modem(int unsigned steps);
+    modem_toggle_seq seq;
+    if (cfg.mdm.toggle_pct == 0)
+      return;
+    seq = modem_toggle_seq::type_id::create("modem_traffic");
+    seq.cfg = cfg.mdm;
+    seq.steps = steps;
+    seq.start(p_sequencer.mdm_sqr);
+  endtask
+
   //Espera TEMT (LSR[6]): la FIFO TX y el registro de corrimiento vacios
   //no basta con la ultima escritura a THR, la FIFO puede estar vacia mientras todavia sale el ultimo caracter
   task wait_temt();
@@ -473,7 +485,7 @@ class uart_main_vseq extends uvm_sequence;
       if (!active_loop) begin
         //Modo normal: TX, RX y el servicio corren en paralelo porque el UART puede mandar y recibir al mismo tiempo
         //solo los accesos al bus Wishbone se turnan (con el candado), la linea serie corre sola
-        //join espera a que terminen los tres
+        //join espera a que terminen las cuatro tareas
         planned_tx += tx_count;
         planned_rx += rx_count;
         `uvm_info("UART_BURST", $sformatf("Objetivo TX=%0d RX=%0d", tx_count, rx_count), UVM_MEDIUM)
@@ -481,6 +493,7 @@ class uart_main_vseq extends uvm_sequence;
           send_tx(tx_count);
           send_rx(rx_count);
           service_rx();
+          send_modem(tx_count + rx_count); //cambios de modem mientras hay trafico
         join
       end else begin
         //Loopback: lo que se escribe en THR vuelve por adentro a RBR, por eso cuenta como RX y no como TX

@@ -131,7 +131,7 @@ class uart_env_cfg extends uvm_object;
   uart_scb_cfg scb;
   wb_agent_cfg wb;
   ser_agent_cfg ser;
-  virtual modem_if mdm_vif; //interfaz del modem, en E2 todavia no hay agente de modem
+  modem_agent_cfg mdm; //configuracion del agente de modem, incluye su interfaz
 
   //Candado del bus: el trafico TX y el servicio RX usan el mismo maestro Wishbone
   //semaphore es un semaforo de SystemVerilog, con una sola llave (new(1)) solo uno puede usar el bus a la vez
@@ -146,7 +146,6 @@ class uart_env_cfg extends uvm_object;
   int unsigned ser_glitch_pct = 3;
   int unsigned ser_baud_err_pct = 5;
   int unsigned ser_baud_err_max = 8;
-  int unsigned mdm_toggle_pct = 20;
 
   //Controles de la prueba
   int unsigned run_ral_reset = 1;              //1 = corre la prueba de reset del RAL al inicio
@@ -163,6 +162,7 @@ class uart_env_cfg extends uvm_object;
     scb = uart_scb_cfg::type_id::create("scb");
     wb = wb_agent_cfg::type_id::create("wb");
     ser = ser_agent_cfg::type_id::create("ser");
+    mdm = modem_agent_cfg::type_id::create("mdm");
     bus_lock = new(1); //semaforo con una sola llave
   endfunction
 
@@ -270,7 +270,7 @@ class uart_env_cfg extends uvm_object;
     read_uint("UART_SER_GLITCH_PCT", ser_glitch_pct);
     read_uint("UART_SER_BAUD_ERR_PCT", ser_baud_err_pct);
     read_uint("UART_SER_BAUD_ERR_MAX", ser_baud_err_max);
-    read_uint("UART_MDM_TOGGLE_PCT", mdm_toggle_pct);
+    read_uint("UART_MDM_TOGGLE_PCT", mdm.toggle_pct);
     read_uint("UART_RAL_HW_RESET", run_ral_reset);
     read_uint("UART_BUS_TIMEOUT_CYCLES", bus_timeout_cycles);
     read_uint("UART_TIMEOUT_CYCLES", timeout_cycles);
@@ -308,7 +308,7 @@ class uart_env_cfg extends uvm_object;
     require((line.bc_pct <= 100) && (ctrl.fcr_clear_pct <= 100) && (ctrl.loop_pct <= 100), "Porcentaje de linea o control mayor que 100");
     require((sw.blind_read_pct <= 100) && (sw.rand_access_pct <= 100) &&
             (sw.recfg_pct <= 100) && (sw.rst_pct <= 100), "Porcentaje de software mayor que 100");
-    require((wb.sel_odd_pct <= 100) && (mdm_toggle_pct <= 100), "Porcentaje de bus o modem mayor que 100");
+    require((wb.sel_odd_pct <= 100) && (mdm.toggle_pct <= 100), "Porcentaje de bus o modem mayor que 100");
     require((ser_parity_err_pct <= 100) && (ser_frame_err_pct <= 100) && (ser_break_pct <= 100) &&
             (ser_stop2_err_pct <= 100) && (ser_glitch_pct <= 100) && (ser_baud_err_pct <= 100), "Porcentaje de error serie mayor que 100");
     require(ser_baud_err_max <= 20, "UART_SER_BAUD_ERR_MAX va de 0 a 20");
@@ -328,7 +328,6 @@ class uart_env_cfg extends uvm_object;
     unsupported(ser_stop2_err_pct, "Inyeccion STOP2");
     unsupported(ser_glitch_pct, "Glitch RX");
     unsupported(ser_baud_err_pct, "Desajuste de baud");
-    unsupported(mdm_toggle_pct, "Estimulo modem");
   endfunction
 
   //Elige una opcion segun sus pesos, ej. pesos {1,1,2} dan 25 %, 25 % y 50 %

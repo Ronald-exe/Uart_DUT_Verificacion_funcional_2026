@@ -38,6 +38,7 @@ class uart_env extends uvm_env;
   uart_env_cfg cfg;                        //configuracion que publico la prueba
   wb_agent wb_agt;                         //agente Wishbone
   ser_agent ser_agt;                       //agente serie
+  modem_agent mdm_agt;                     //agente de modem
   uart_reg_block regm;                     //modelo de registros (RAL)
   uart_timed_reg_adapter adapter;          //adaptador del RAL con pausa
   uvm_reg_predictor #(wb_item) predictor;  //predictor de UVM, actualiza el espejo del RAL con lo que ve el monitor
@@ -60,11 +61,13 @@ class uart_env extends uvm_env;
     //el agente serie recibe un solo cfg compartido, asi el driver y los dos monitores usan el mismo formato de linea
     uvm_config_db#(wb_agent_cfg)::set(this, "wb_agt*", "cfg", cfg.wb);
     uvm_config_db#(ser_agent_cfg)::set(this, "ser_agt*", "cfg", cfg.ser);
+    uvm_config_db#(modem_agent_cfg)::set(this, "mdm_agt*", "cfg", cfg.mdm);
     uvm_config_db#(uart_env_cfg)::set(this, "scb", "cfg", cfg);
     uvm_config_db#(uart_env_cfg)::set(this, "cov", "cfg", cfg);
     //Creamos los componentes llamando a la fabrica, el ambiente es el parent (this) de cada uno
     wb_agt = wb_agent::type_id::create("wb_agt", this);
     ser_agt = ser_agent::type_id::create("ser_agt", this);
+    mdm_agt = modem_agent::type_id::create("mdm_agt", this);
     //El RAL es un objeto y no tiene build_phase, por eso llamamos su build a mano, si no los mapas y registros quedan vacios
     regm = uart_reg_block::type_id::create("regm");
     regm.build();
@@ -103,6 +106,7 @@ class uart_env extends uvm_env;
     //los secuenciadores reales de cada agente siguen manejando el saludo con su driver
     vseqr.wb_sqr = wb_agt.sqr;
     vseqr.ser_sqr = ser_agt.sqr;
+    vseqr.mdm_sqr = mdm_agt.sqr;
     vseqr.regm = regm;
     vseqr.predictor = predictor;
     vseqr.cfg = cfg;

@@ -27,7 +27,7 @@ class uart_base_test extends uvm_test;
       `uvm_fatal("UART_VIF", "No se encontro wb_vif")
     if (!uvm_config_db#(virtual uart_ser_if)::get(this, "", "ser_vif", cfg.ser.vif))
       `uvm_fatal("UART_VIF", "No se encontro ser_vif")
-    if (!uvm_config_db#(virtual modem_if)::get(this, "", "mdm_vif", cfg.mdm_vif))
+    if (!uvm_config_db#(virtual modem_if)::get(this, "", "mdm_vif", cfg.mdm.vif))
       `uvm_fatal("UART_VIF", "No se encontro mdm_vif")
     //Leemos los plusargs en un solo lugar (uart_env_cfg), antes de crear el ambiente
     cfg.parse_plusargs();

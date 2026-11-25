@@ -9,6 +9,7 @@ class uart_vsequencer extends uvm_sequencer;
   //Handles a los secuenciadores reales de los agentes, asi sus drivers siguen con el saludo normal de UVM (get_next_item / item_done)
   uvm_sequencer #(wb_item) wb_sqr;   //secuenciador del agente Wishbone
   uvm_sequencer #(ser_item) ser_sqr; //secuenciador del agente serie
+  uvm_sequencer #(modem_item) mdm_sqr; //secuenciador del agente de modem
 
   uart_reg_block regm; //handle al RAL, para hacer write y read de registros por nombre
   //handle al predictor, lo necesitamos porque cambiar DLAB cambia como se leen las direcciones del bus (map_dlab0 o map_dlab1)
