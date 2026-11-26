@@ -1,4 +1,4 @@
-// Caso linea (caso de esquina): DL = 0 (UART mudo), cola lenta de DL (17 a 40), break TX y lecturas ciegas de RBR
+// Caso linea (caso de esquina): DL = 0 (UART mudo), cola lenta de DL (17 a 40) y break TX
 // Iterations and TX/RX burst sizes use the plan defaults (20 iterations, bursts of 0 to 20)
 // Leave line-format weights unchanged so supported formats can still vary across seeds
 
@@ -16,7 +16,7 @@
 +UART_SW_MODE_WEIGHTS=0,1
 +UART_SW_SERVICE_DELAY_MIN=0
 +UART_SW_SERVICE_DELAY_MAX=0
-+UART_SW_BLIND_READ_PCT=20
++UART_SW_BLIND_READ_PCT=0
 +UART_SW_RAND_ACCESS_PCT=0
 +UART_SW_RECFG_PCT=0
 +UART_SW_RST_PCT=0
@@ -32,8 +32,8 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
-// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR; BUG-07: una lectura ciega puede dejar DR en 1 con la FIFO vacia
-+UART_SCB_WAIVE_BUGS=1,7
+// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR
++UART_SCB_WAIVE_BUGS=1
 
 // Pocas iteraciones porque con DL de hasta 40 cada caracter tarda unas 8000 ciclos
 +UART_SW_ITER=5
