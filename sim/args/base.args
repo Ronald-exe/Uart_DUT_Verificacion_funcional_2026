@@ -32,5 +32,5 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
-// Keep the waiver list empty because the current scoreboard has no known-bug filtering
-+UART_SCB_WAIVE_BUGS=
+// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR, fallaria en cada escritura a MCR
++UART_SCB_WAIVE_BUGS=1

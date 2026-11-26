@@ -3,8 +3,8 @@
 //el scoreboard dice si el DUT hizo bien las cosas, la cobertura dice si ya probamos todas las cosas
 //Escucha a los mismos monitores que el scoreboard, asi solo cuenta lo que de verdad paso en el DUT
 //y no lo que la secuencia intento hacer
-//Por ahora tiene 7 covergroups: cg_reg, cg_line_cfg, cg_tx_char, cg_rx_char, cg_lsr, cg_iir y cg_fifo
-//cg_reset y cg_modem se agregan el dia que exista su funcion (reset con trafico, modem)
+//Tiene 9 covergroups: cg_reg, cg_line_cfg, cg_tx_char, cg_rx_char, cg_lsr, cg_iir, cg_fifo, cg_modem y cg_mcr
+//cg_reset se agrega cuando exista el reset con trafico
 //Hereda de uvm_component porque vive toda la simulacion dentro del ambiente, igual que el scoreboard
 class uart_coverage extends uvm_component;
 
@@ -17,6 +17,7 @@ class uart_coverage extends uvm_component;
   uvm_tlm_analysis_fifo #(wb_item) wb_in;   //accesos del bus Wishbone
   uvm_tlm_analysis_fifo #(ser_item) tx_in;  //caracteres que salieron por stx
   uvm_tlm_analysis_fifo #(ser_item) rx_in;  //caracteres que entraron por srx
+  uvm_tlm_analysis_fifo #(modem_item) mdm_in; //cambios en los pines de modem
 
   //Copias de los registros de formato, las armamos con las escrituras que ve el monitor Wishbone
   //las necesitamos porque el ser_item solo trae el dato, no con que formato viajo
@@ -24,6 +25,7 @@ class uart_coverage extends uvm_component;
   bit [7:0] dll = 8'h00;     //parte baja del divisor
   bit [7:0] dlm = 8'h00;     //parte alta del divisor
   bit [1:0] fcr_tl = 2'b11;  //copia de FCR[7:6], el nivel de disparo (reset = 14)
+  bit [3:0] pins = 4'b1111;  //ultimo valor de los pines de entrada de modem {DCD, RI, DSR, CTS}
   int unsigned idle_cycles;  //ciclos libres (cyc = 0) desde el ultimo acceso, para cp_gap
 
   //cg_reg: se muestrea en cada acceso Wishbone
@@ -140,6 +142,30 @@ class uart_coverage extends uvm_component;
     x_ei_dlab: cross cp_ei, cp_dlab; //EI leido con DLAB en 0 y en 1 (AMB-14)
   endgroup
 
+  //cg_modem: se muestrea por cada pin de entrada de modem que cambia, que pin fue y si subio o bajo
+  covergroup cg_modem with function sample(int unsigned line, bit rise);
+    cp_line: coverpoint line {
+      bins cts = {0};
+      bins dsr = {1};
+      bins ri  = {2};
+      bins dcd = {3};
+    }
+    cp_edge: coverpoint rise {
+      bins baja  = {0};
+      bins sube  = {1};
+    }
+    x_line_edge: cross cp_line, cp_edge; //cada pin subiendo y bajando
+  endgroup
+
+  //cg_mcr: se muestrea en cada escritura a MCR, cada bit en 0 y en 1
+  covergroup cg_mcr with function sample(bit [4:0] mcr);
+    cp_dtr:  coverpoint mcr[0];
+    cp_rts:  coverpoint mcr[1];
+    cp_out1: coverpoint mcr[2];
+    cp_out2: coverpoint mcr[3];
+    cp_loop: coverpoint mcr[4];
+  endgroup
+
   //cg_fifo: se muestrea en cada lectura de LSR, si hubo overrun (OE) y con que nivel de disparo
   //el plan tambien pide llenar la FIFO TX y limpiar FIFOs con trafico, eso queda para cuando se generen
   covergroup cg_fifo with function sample(bit oe, bit [1:0] tl);
@@ -190,6 +216,8 @@ class uart_coverage extends uvm_component;
     cg_lsr = new();
     cg_iir = new();
     cg_fifo = new();
+    cg_modem = new();
+    cg_mcr = new();
   endfunction
 
   //En build tomamos la configuracion y creamos los buzones, asi el ambiente los puede conectar en su connect_phase
@@ -200,6 +228,7 @@ class uart_coverage extends uvm_component;
     wb_in = new("wb_in", this);
     tx_in = new("tx_in", this);
     rx_in = new("rx_in", this);
+    mdm_in = new("mdm_in", this);
   endfunction
 
   //Saca el numero de registro de un acceso, igual que el scoreboard: el piso sale de adr y la puerta de sel
@@ -264,6 +293,8 @@ class uart_coverage extends uvm_component;
         dlm = value; //direccion 1 con DLAB = 1 es DLM
       end else if (addr == 2) begin
         fcr_tl = value[7:6]; //escritura a FCR: guardamos el nivel de disparo
+      end else if (addr == 4) begin
+        cg_mcr.sample(value[4:0]); //escritura a MCR
       end
     end
     //3. lecturas de LSR (direccion 5, sirve con DLAB en 0 o en 1)
@@ -277,10 +308,22 @@ class uart_coverage extends uvm_component;
     end
   endfunction
 
+  //Procesa un cambio de modem: muestrea cg_modem una vez por cada pin de entrada que cambio
+  function void observe_modem(modem_item it);
+    bit [3:0] now;
+    now = {it.dcd, it.ri, it.dsr, it.cts};
+    for (int i = 0; i < 4; i++) begin
+      if (now[i] != pins[i])
+        cg_modem.sample(i, now[i]); //i = que pin, now[i] = 1 si subio
+    end
+    pins = now;
+  endfunction
+
   //En la fase de run, en cada ciclo sacamos todo de los buzones y muestreamos, igual que el scoreboard
   task run_phase(uvm_phase phase);
     wb_item wb;
     ser_item ch;
+    modem_item mdm;
     forever begin
       //esperamos un ciclo y un poquito mas (1ps), asi los monitores ya publicaron lo de este ciclo
       @(cfg.wb.vif.mon_cb);
@@ -295,6 +338,7 @@ class uart_coverage extends uvm_component;
         wb_in.flush();
         tx_in.flush();
         rx_in.flush();
+        mdm_in.flush();
         continue;
       end
       //1. accesos Wishbone
@@ -303,6 +347,8 @@ class uart_coverage extends uvm_component;
       //2. caracteres de stx y de srx, con el formato que tiene LCR en este momento
       while (tx_in.try_get(ch))
         cg_tx_char.sample(lcr[1:0], lcr[2], parity_mode());
+      while (mdm_in.try_get(mdm))
+        observe_modem(mdm);
       while (rx_in.try_get(ch))
         cg_rx_char.sample(lcr[1:0], lcr[2], parity_mode(), error_of(ch));
       //3. contamos los ciclos libres del bus para el siguiente acceso
@@ -315,9 +361,10 @@ class uart_coverage extends uvm_component;
   //sirve para ver rapido como va sin abrir URG, el numero oficial es el de URG con todas las semillas juntas
   function void report_phase(uvm_phase phase);
     super.report_phase(phase);
-    `uvm_info("COV_SUMMARY", $sformatf("cg_reg=%0.1f%% cg_line_cfg=%0.1f%% cg_tx_char=%0.1f%% cg_rx_char=%0.1f%% cg_lsr=%0.1f%% cg_iir=%0.1f%% cg_fifo=%0.1f%%",
+    `uvm_info("COV_SUMMARY", $sformatf("cg_reg=%0.1f%% cg_line_cfg=%0.1f%% cg_tx_char=%0.1f%% cg_rx_char=%0.1f%% cg_lsr=%0.1f%% cg_iir=%0.1f%% cg_fifo=%0.1f%% cg_modem=%0.1f%% cg_mcr=%0.1f%%",
               cg_reg.get_coverage(), cg_line_cfg.get_coverage(), cg_tx_char.get_coverage(),
-              cg_rx_char.get_coverage(), cg_lsr.get_coverage(), cg_iir.get_coverage(), cg_fifo.get_coverage()), UVM_LOW)
+              cg_rx_char.get_coverage(), cg_lsr.get_coverage(), cg_iir.get_coverage(), cg_fifo.get_coverage(),
+              cg_modem.get_coverage(), cg_mcr.get_coverage()), UVM_LOW)
   endfunction
 
 endclass : uart_coverage

@@ -11,9 +11,9 @@
 +UART_LCR_BC_PCT=0
 +UART_MCR_LOOP_PCT=0
 
-//Usamos sondeo para que este caso pruebe el agente sin depender del servicio de interrupciones
+//Servicio por interrupcion con IER[3] = 1: la interrupcion de modem hace que el software lea MSR y el scoreboard lo revise (CE-11 del plan)
 //Los otros estimulos del software quedan apagados igual que en el caso base
-+UART_SW_MODE_WEIGHTS=0,1
++UART_SW_MODE_WEIGHTS=1,0
 +UART_SW_SERVICE_DELAY_MIN=0
 +UART_SW_SERVICE_DELAY_MAX=0
 +UART_SW_BLIND_READ_PCT=0
@@ -32,5 +32,8 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=20
 
-//La lista vacia mantiene estrictos los chequeos del scoreboard
-+UART_SCB_WAIVE_BUGS=
+// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR, fallaria en cada escritura a MCR; BUG-02: MSR[7:4] no esta invertido; BUG-03: TERI con cualquier cambio de RI
++UART_SCB_WAIVE_BUGS=1,2,3
+
+//IER: dato disponible, THR vacio y error de linea al 50 %, modem siempre (bit 3)
++UART_IER_BIT_PCT=50,50,50,100

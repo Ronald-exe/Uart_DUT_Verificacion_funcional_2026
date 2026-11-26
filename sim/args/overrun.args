@@ -32,8 +32,8 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
-// BUG-04 dispensado: con la FIFO RX llena el DUT pisa el dato mas viejo en vez de perder el nuevo
-+UART_SCB_WAIVE_BUGS=4
+// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR, fallaria en cada escritura a MCR; BUG-04: con la FIFO RX llena el DUT pisa el dato mas viejo
++UART_SCB_WAIVE_BUGS=1,4
 
 // Rafagas RX de 17 a 20 caracteres casi sin silencio entre ellos: con el retraso de servicio la FIFO se llena seguro
 +UART_SER_BURST_MIN=17

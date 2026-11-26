@@ -17,6 +17,7 @@ class uart_scoreboard extends uvm_scoreboard;
   uvm_tlm_analysis_fifo #(wb_item) wb_in;   //accesos del bus Wishbone
   uvm_tlm_analysis_fifo #(ser_item) tx_in;  //caracteres que salieron por stx
   uvm_tlm_analysis_fifo #(ser_item) rx_in;  //caracteres que entraron por srx
+  uvm_tlm_analysis_fifo #(modem_item) mdm_in; //cambios en los pines de modem (monitor de modem)
 
   //Colas de lo esperado, TX y RX van separadas porque son caminos independientes
   //son colas porque las FIFOs del UART tambien sacan los datos en orden (el primero que entra es el primero que sale)
@@ -35,6 +36,14 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [2:0] lsr_seen;    //errores que mostro LSR desde la ultima lectura de RBR
   bit oe_possible;       //1 si hubo overrun desde la ultima lectura de LSR (OE se puede mostrar)
 
+  //Modelo de MSR (seccion 10 del plan): los 4 bits van en el mismo orden que MSR, {DCD, RI, DSR, CTS}
+  bit [3:0] pins = 4'b1111;  //valor de los pines de entrada que vio el monitor de modem (en reposo estan en 1)
+  bit [3:0] msr_delta;       //deltas esperados {DDCD, TERI, DDSR, DCTS} desde la ultima lectura de MSR
+  bit msr_unsure;            //1 si la ultima lectura cayo justo despues de un cambio: no sabemos que deltas borro
+  longint unsigned cycle;           //ciclos desde el inicio, para la ventana de los sincronizadores
+  longint unsigned last_pin_change; //ciclo del ultimo cambio en los pines de entrada
+  longint unsigned last_msr_read;   //ciclo de la ultima lectura de MSR con DLAB = 0
+
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
   longint unsigned tx_compared;   //caracteres TX comparados
@@ -45,6 +54,7 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned iir_checked;   //lecturas de IIR revisadas
   longint unsigned overruns;      //caracteres que llegaron con la FIFO RX llena
   longint unsigned rx_lost;       //caracteres RX que se perdieron por overrun (no se van a leer)
+  longint unsigned msr_checked;   //lecturas de MSR revisadas
   longint unsigned err_chars;     //caracteres RX con error que se leyeron de RBR
   longint unsigned err_missed;    //de esos, cuantos LSR nunca marco (chequeo B)
   longint unsigned err_missed_seq;//de los no marcados, cuantos venian justo despues de otro con el mismo error
@@ -66,6 +76,7 @@ class uart_scoreboard extends uvm_scoreboard;
     wb_in = new("wb_in", this);
     tx_in = new("tx_in", this);
     rx_in = new("rx_in", this);
+    mdm_in = new("mdm_in", this);
   endfunction
 
   //Saca el numero de registro de un acceso, igual que el adaptador: el piso sale de adr y la puerta de sel
@@ -183,6 +194,8 @@ class uart_scoreboard extends uvm_scoreboard;
     end
     if (index == 2)
       check_iir(actual); //lectura de IIR: revisamos que la interrupcion que reporta tenga sentido
+    if (index == 6)
+      check_msr(actual); //lectura de MSR: estado y deltas del modem
     //lectura de la direccion 0 con DLAB = 0 es RBR: se compara con el mas viejo de la cola RX
     if ((index == 0) && !lcr[7]) begin //¿este acceso fue a THR/RBR?
       if (rx_queue.size() == 0) begin
@@ -291,6 +304,64 @@ class uart_scoreboard extends uvm_scoreboard;
     endcase
   endfunction
 
+  //Procesa un cambio en los pines de modem que vio el monitor de modem
+  //guarda los pines nuevos y anota que deltas se tienen que encender en MSR[3:0]
+  //  DCTS, DDSR y DDCD: cualquier cambio de su pin
+  //  TERI: BUG-03 (AMB-05) la especificacion dice solo cuando RI pasa de 0 a 1, el DUT lo enciende con cualquier cambio
+  //        si el BUG-03 esta dispensado seguimos al RTL, si no a la especificacion
+  //en loopback los pines externos no deberian tener efecto (BUG-05), por eso ahi no se anotan deltas
+  function void observe_modem(modem_item it);
+    bit [3:0] now;
+    bit [3:0] changed;
+    now = {it.dcd, it.ri, it.dsr, it.cts};
+    changed = now ^ pins; //^ es xor: 1 en cada pin que cambio
+    if (changed == 0)
+      return; //solo cambiaron RTS o DTR, que son salidas
+    last_pin_change = cycle;
+    //el DUT borra los deltas 2 ciclos despues de leer MSR (msi_reset, uart_regs.v linea 457)
+    //si el pin cambia justo en esos ciclos el borrado le puede ganar, asi que no sabemos si el delta quedo
+    if (cycle - last_msr_read < 4)
+      msr_unsure = 1;
+    if (!loop) begin
+      msr_delta[0] |= changed[0]; //DCTS
+      msr_delta[1] |= changed[1]; //DDSR
+      msr_delta[3] |= changed[3]; //DDCD
+      if (cfg.scb.waived(3))
+        msr_delta[2] |= changed[2];            //TERI como el RTL: cualquier cambio de RI
+      else
+        msr_delta[2] |= changed[2] && now[2];  //TERI como la especificacion: RI de 0 a 1
+    end
+    pins = now;
+  endfunction
+
+  //Revisa una lectura de MSR
+  //  MSR[7:4] (estado): BUG-02 (AMB-04) la especificacion dice que es el INVERSO de los pines, el DUT pone los pines tal cual
+  //  MSR[3:0] (deltas): los que anoto observe_modem desde la ultima lectura
+  //Ventana: el DUT pasa los pines por sincronizadores, un cambio tarda unos ciclos en llegar a MSR,
+  //por eso si el ultimo cambio fue hace menos de 8 ciclos no comparamos (tolerancia de la seccion 10 del plan)
+  //En loopback MSR[7:4] lo revisa la asercion A-LB-02 y los deltas son el BUG-05, por eso aqui no se revisa
+  function void check_msr(bit [7:0] msr);
+    bit [3:0] expected_state;
+    if (loop)
+      return;
+    if (cycle - last_pin_change < 8) begin
+      msr_unsure = 1; //no sabemos si el DUT ya habia visto el cambio
+    end else begin
+      msr_checked++;
+      expected_state = cfg.scb.waived(2) ? pins : ~pins;
+      if (msr[7:4] !== expected_state)
+        `uvm_error("SCB_MSR", $sformatf("BUG-02: MSR[7:4]=%04b, esperado %04b (pines=%04b; la especificacion dice inverso)", msr[7:4], expected_state, pins))
+      if (!msr_unsure && (msr[3:0] !== msr_delta))
+        `uvm_error("SCB_MSR", $sformatf("MSR[3:0]=%04b, deltas esperados %04b (si solo difiere TERI, MSR[2], es el BUG-03)", msr[3:0], msr_delta))
+      msr_unsure = 0;
+    end
+    //la lectura con DLAB = 0 borra los deltas (con DLAB = 1 no, AMB-14)
+    if (!lcr[7]) begin
+      msr_delta = 0;
+      last_msr_read = cycle;
+    end
+  endfunction
+
   //Procesa un caracter que salio por stx: se compara con el primero de la cola TX
   function void observe_tx(ser_item it);
     bit [7:0] expected;
@@ -314,10 +385,12 @@ class uart_scoreboard extends uvm_scoreboard;
     wb_item pending[$]; //accesos Wishbone de este ciclo
     wb_item wb;
     ser_item serial;
+    modem_item modem;
     forever begin
       //esperamos un ciclo y un poquito mas (1ps), asi todos los monitores ya publicaron lo de este ciclo
       @(cfg.wb.vif.mon_cb);
       #1ps;
+      cycle++;
       //Con reset activo botamos todo lo pendiente y volvemos LCR a su valor de reset
       //los totales no se reinician porque en E2 no hay reset en medio del trafico
       if (cfg.wb.vif.rst !== 1'b0) begin
@@ -331,6 +404,9 @@ class uart_scoreboard extends uvm_scoreboard;
         wb_in.flush();
         tx_in.flush();
         rx_in.flush();
+        mdm_in.flush();
+        msr_delta = 0;
+        msr_unsure = 0;
         lcr = 8'h03;
         loop = 0;
         ier = 0;
@@ -352,6 +428,8 @@ class uart_scoreboard extends uvm_scoreboard;
       end
       while (rx_in.try_get(serial))
         observe_rx(serial);
+      while (mdm_in.try_get(modem))
+        observe_modem(modem); //cambios de modem, antes de las lecturas (igual que RX)
       foreach (pending[i]) begin
         if (!pending[i].we)
           observe_read(pending[i]);
@@ -378,7 +456,7 @@ class uart_scoreboard extends uvm_scoreboard;
       `uvm_error("SCB_NO_TARGETS", "La secuencia principal no completo su presupuesto")
     //quedo algo sin comparar en las colas o en los buzones
     if ((tx_queue.size() != 0) || (rx_queue.size() != 0) ||
-        (wb_in.used() != 0) || (tx_in.used() != 0) || (rx_in.used() != 0))
+        (wb_in.used() != 0) || (tx_in.used() != 0) || (rx_in.used() != 0) || (mdm_in.used() != 0))
       `uvm_error("SCB_PENDING", "Quedaron datos sin comparar al terminar")
     //lo que se vio y comparo tiene que dar justo lo que se planeo
     //los caracteres perdidos por overrun se vieron en la linea pero nunca se leen de RBR, por eso se restan
@@ -393,7 +471,7 @@ class uart_scoreboard extends uvm_scoreboard;
     `uvm_info("SCB_SUMMARY", $sformatf("TX comparados=%0d RX comparados=%0d lecturas vacias=%0d", tx_compared, rx_compared, empty_reads), UVM_LOW)
     `uvm_info("SCB_LSR", $sformatf("LSR revisados=%0d; caracteres con error=%0d, no marcados=%0d (seguidos de otro con el mismo error=%0d)",
               lsr_checked, err_chars, err_missed, err_missed_seq), UVM_LOW)
-    `uvm_info("SCB_INT", $sformatf("IIR revisados=%0d; overruns=%0d", iir_checked, overruns), UVM_LOW)
+    `uvm_info("SCB_INT", $sformatf("IIR revisados=%0d; overruns=%0d; MSR revisados=%0d", iir_checked, overruns, msr_checked), UVM_LOW)
   endfunction
 
 endclass : uart_scoreboard

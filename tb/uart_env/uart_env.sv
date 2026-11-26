@@ -102,6 +102,9 @@ class uart_env extends uvm_env;
     wb_agt.mon.ap.connect(cov.wb_in.analysis_export);
     ser_agt.mon_tx.ap.connect(cov.tx_in.analysis_export);
     ser_agt.mon_rx.ap.connect(cov.rx_in.analysis_export);
+    //El monitor de modem va al scoreboard (modelo de MSR) y a la cobertura (cg_modem)
+    mdm_agt.mon.ap.connect(scb.mdm_in.analysis_export);
+    mdm_agt.mon.ap.connect(cov.mdm_in.analysis_export);
     //Al secuenciador virtual solo le damos handles, no es otra conexion de driver
     //los secuenciadores reales de cada agente siguen manejando el saludo con su driver
     vseqr.wb_sqr = wb_agt.sqr;

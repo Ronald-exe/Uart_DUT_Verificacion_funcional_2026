@@ -32,5 +32,5 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
-// BUG-06 dispensado: con errores en RX y sondeo rapido de LSR el DUT pierde algunos avisos de error (ver uart_scoreboard)
-+UART_SCB_WAIVE_BUGS=6
+// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR, fallaria en cada escritura a MCR; BUG-06: el DUT pierde algunos avisos de error en LSR
++UART_SCB_WAIVE_BUGS=1,6
