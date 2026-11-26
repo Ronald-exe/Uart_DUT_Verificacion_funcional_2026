@@ -43,6 +43,7 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned cycle;           //ciclos desde el inicio, para la ventana de los sincronizadores
   longint unsigned last_pin_change; //ciclo del ultimo cambio en los pines de entrada
   longint unsigned last_msr_read;   //ciclo de la ultima lectura de MSR con DLAB = 0
+  longint unsigned last_rx_cycle;   //ciclo en que el monitor RX publico el ultimo caracter
 
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
@@ -176,6 +177,7 @@ class uart_scoreboard extends uvm_scoreboard;
       return;
     end
     rx_queue.push_back(character_mask(it.data));
+    last_rx_cycle = cycle;
     //guardamos sus errores en el mismo orden, {BI, FE, PE} igual que LSR[4:2]
     rx_flags.push_back({it.brk, it.frame_err, it.parity_err});
     possible |= {it.brk, it.frame_err, it.parity_err};
@@ -212,6 +214,12 @@ class uart_scoreboard extends uvm_scoreboard;
         end else begin
           empty_reads++;
         end
+      end else if (!last_dr && (rx_queue.size() == 1) && (cycle - last_rx_cycle < cfg.ser.bit_cycles()) &&
+                   (actual !== rx_queue[0])) begin
+        //Lectura ciega justo cuando llega un caracter (tolerancia de un tiempo de bit, seccion 10 del plan):
+        //el monitor publica el caracter un poco ANTES de que el DUT lo meta a su FIFO,
+        //asi que si el DUT no devolvio ese caracter es porque todavia no lo tenia: se cuenta como lectura vacia y sigue esperado
+        empty_reads++;
       end else begin
         expected = rx_queue.pop_front(); //pop_front saca el primero de la cola
         //Lectura ciega (AMB-11): el software leyo RBR sin que LSR dijera DR = 1

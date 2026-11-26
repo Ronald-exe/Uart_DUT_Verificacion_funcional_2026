@@ -86,8 +86,10 @@ module uart_sva
   c_wb_03a: cover property (int_o); //que int_o si llego a subir alguna vez
 
   //A-WB-03b: cuando hay ack en una lectura, el dato que devuelve el DUT no tiene X
+  //menos al leer RBR (direccion 0 con DLAB = 0): con la FIFO RX vacia el valor no esta definido (AMB-11)
+  //y en simulacion "no definido" es X, porque esa parte de la memoria de la FIFO nunca se escribio
   property p_wb_03b;
-    (wb_ack_o && !wb_we_i) |-> !$isunknown(wb_dat_o);
+    (wb_ack_o && !wb_we_i && !((wb_adr_i[4:2] == 3'b000) && (wb_sel_i == 4'b1000) && !lcr[7])) |-> !$isunknown(wb_dat_o);
   endproperty
   a_wb_03b: assert property (p_wb_03b) else `uvm_error("A-WB-03", "dat_o tiene X o Z en una lectura")
   c_wb_03b: cover property (wb_ack_o && !wb_we_i);
