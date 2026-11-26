@@ -164,6 +164,7 @@ class uart_main_vseq extends uvm_sequence;
   bit [15:0] active_dl;         //divisor que se escribio en DLL y DLM
   bit active_loop;              //1 si se activo loopback (MCR[4])
   bit active_irq;               //1 si el software atiende RX por interrupcion, 0 si por sondeo
+  bit active_bc;                //1 si en esta corrida se manda un break TX (LCR[6])
   longint unsigned planned_tx;  //total de escrituras TX planeadas, se le pasa al scoreboard al final
   longint unsigned planned_rx;  //total de caracteres RX planeados
 
@@ -299,6 +300,8 @@ class uart_main_vseq extends uvm_sequence;
     //loopback (MCR[4]) con su porcentaje: lo que se escribe en THR vuelve por adentro del DUT a RBR
     active_loop = ($urandom_range(99, 0) < cfg.ctrl.loop_pct);
     mcr[4] = active_loop;
+    //break TX con su porcentaje: no va en el LCR de la configuracion, se manda aparte con send_break
+    active_bc = ($urandom_range(99, 0) < cfg.line.bc_pct);
     //estilo de servicio con sus pesos [interrupcion, sondeo]
     //por interrupcion el software solo lee cuando int_o pide atencion, por eso necesita IER[0] (dato disponible y timeout)
     //si no, los caracteres nunca avisarian y el servicio se quedaria esperando
@@ -416,7 +419,7 @@ class uart_main_vseq extends uvm_sequence;
 
   //Servicio por sondeo: mientras llegan caracteres, lee LSR y si hay dato (DR = LSR[0]) lo saca de RBR
   //que la FIFO este vacia no basta para terminar, puede venir otro caracter en camino, por eso tambien se espera rx_done
-  //el retraso de atencion y las lecturas ciegas estan en 0 en E2 hasta que el scoreboard sepa revisarlos
+  //el retraso de atencion (service_delay) sirve para provocar overrun y las lecturas ciegas para leer RBR vacio (AMB-11)
   task service_rx();
     bit [7:0] lsr;
     bit [7:0] ignored;
@@ -453,6 +456,17 @@ class uart_main_vseq extends uvm_sequence;
     seq.start(p_sequencer.mdm_sqr);
   endtask
 
+  //Break TX (hoja 4.4 del plan): LCR[6] = 1 pone stx en 0 aunque no haya nada que transmitir
+  //lo dejamos 2 caracteres (el monitor TX lo ve como break y el scoreboard lo acepta porque LCR[6] = 1)
+  //y despues lo apagamos y esperamos 1 caracter con la linea en reposo antes del trafico
+  task send_break();
+    bit [7:0] ignored;
+    access(1, 3, active_lcr | 8'h40, ignored);  //LCR con el bit 6 (break) en 1
+    repeat (2 * char_cycles()) @(cfg.wb.vif.drv_cb);
+    access(1, 3, active_lcr, ignored);          //LCR sin break
+    repeat (char_cycles()) @(cfg.wb.vif.drv_cb);
+  endtask
+
   //Espera TEMT (LSR[6]): la FIFO TX y el registro de corrimiento vacios
   //no basta con la ultima escritura a THR, la FIFO puede estar vacia mientras todavia sale el ultimo caracter
   task wait_temt();
@@ -475,6 +489,15 @@ class uart_main_vseq extends uvm_sequence;
       ral_preamble();
     //3. configuramos el UART antes del trafico, asi nadie usa el divisor de reset (DL = 0) ni otro formato
     program_uart();
+    //DL = 0: sin baudios el UART no transmite ni recibe (hoja 0.2 del plan), asi que esta corrida no manda trafico
+    //lo que se prueba es que la configuracion con DL = 0 se acepte (cg_line_cfg) y que no salgan pulsos de baudios (A-BAUD-01)
+    if (active_dl == 0) begin
+      `uvm_info("UART_DL0", "DL = 0: el UART queda mudo, esta corrida no manda trafico", UVM_LOW)
+      return;
+    end
+    //break TX antes del trafico, pero no en loopback: ahi el break volveria por adentro y entraria como un caracter RX
+    if (active_bc && !active_loop)
+      send_break();
 
     //4. repetimos n_iter veces
     repeat (cfg.sw.n_iter) begin

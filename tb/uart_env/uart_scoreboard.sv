@@ -55,6 +55,7 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned overruns;      //caracteres que llegaron con la FIFO RX llena
   longint unsigned rx_lost;       //caracteres RX que se perdieron por overrun (no se van a leer)
   longint unsigned msr_checked;   //lecturas de MSR revisadas
+  longint unsigned tx_breaks;     //breaks vistos en stx con LCR[6] = 1
   longint unsigned err_chars;     //caracteres RX con error que se leyeron de RBR
   longint unsigned err_missed;    //de esos, cuantos LSR nunca marco (chequeo B)
   longint unsigned err_missed_seq;//de los no marcados, cuantos venian justo despues de otro con el mismo error
@@ -207,7 +208,12 @@ class uart_scoreboard extends uvm_scoreboard;
           empty_reads++;
       end else begin
         expected = rx_queue.pop_front(); //pop_front saca el primero de la cola
-        check_missed(rx_flags.pop_front());
+        //Lectura ciega (AMB-11): el software leyo RBR sin que LSR dijera DR = 1
+        //igual se compara el dato, pero no se revisa el aviso de error (chequeo B) porque nadie miro LSR antes
+        if (last_dr)
+          check_missed(rx_flags.pop_front());
+        else
+          void'(rx_flags.pop_front()); //void'() descarta lo que devuelve la funcion
         rx_compared++;
         if (actual !== expected)
           `uvm_error("SCB_RX_DATA", $sformatf("RBR esperado=%02h observado=%02h", expected, actual))
@@ -365,6 +371,15 @@ class uart_scoreboard extends uvm_scoreboard;
   //Procesa un caracter que salio por stx: se compara con el primero de la cola TX
   function void observe_tx(ser_item it);
     bit [7:0] expected;
+    //Break TX: con LCR[6] = 1 el DUT pone stx en 0 y el monitor TX lo ve como un break, no es un caracter
+    //si llega un break sin LCR[6] es un error del DUT
+    if (it.brk) begin
+      if (lcr[6])
+        tx_breaks++;
+      else
+        `uvm_error("SCB_TX_BREAK", "stx_pad_o hizo un break sin LCR[6] = 1")
+      return;
+    end
     if (it.parity_err || it.frame_err) // error de paridad o el bit de parada llego en 0 cuando debia ser 1
       `uvm_error("SCB_TX_LINE", "El DUT transmitio una trama con error de linea") //el DUT nunca deberia transmitir con error
     //si la cola esta vacia el DUT transmitio algo que nadie escribio en THR
@@ -468,7 +483,7 @@ class uart_scoreboard extends uvm_scoreboard;
   //En report_phase imprimimos el resumen, es el [SCB_SUMMARY] que aparece al final del log
   function void report_phase(uvm_phase phase);
     super.report_phase(phase);
-    `uvm_info("SCB_SUMMARY", $sformatf("TX comparados=%0d RX comparados=%0d lecturas vacias=%0d", tx_compared, rx_compared, empty_reads), UVM_LOW)
+    `uvm_info("SCB_SUMMARY", $sformatf("TX comparados=%0d RX comparados=%0d lecturas vacias=%0d breaks TX=%0d", tx_compared, rx_compared, empty_reads, tx_breaks), UVM_LOW)
     `uvm_info("SCB_LSR", $sformatf("LSR revisados=%0d; caracteres con error=%0d, no marcados=%0d (seguidos de otro con el mismo error=%0d)",
               lsr_checked, err_chars, err_missed, err_missed_seq), UVM_LOW)
     `uvm_info("SCB_INT", $sformatf("IIR revisados=%0d; overruns=%0d; MSR revisados=%0d", iir_checked, overruns, msr_checked), UVM_LOW)
