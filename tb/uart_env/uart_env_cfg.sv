@@ -95,9 +95,9 @@ class uart_scb_cfg extends uvm_object;
   //Registramos en la fabrica
   `uvm_object_utils(uart_scb_cfg)
 
-  //Lista de BUG dispensados (BUG-01 a BUG-06), los de la lista se reportan como UVM_WARNING y no como UVM_ERROR
+  //Lista de BUG dispensados (BUG-01 a BUG-07), los de la lista se reportan como UVM_WARNING y no como UVM_ERROR
   //asi una regresion puede pasar aunque el DUT tenga errores conocidos, y con la lista vacia se reproduce cada BUG
-  string waive_bugs = "1,2,3,4,5,6";
+  string waive_bugs = "1,2,3,4,5,6,7";
 
   //Se crea el constructor
   function new(string name = "uart_scb_cfg");
@@ -105,7 +105,7 @@ class uart_scb_cfg extends uvm_object;
   endfunction
 
   //Dice si el BUG numero n esta en la lista, ej. con "1,6" waived(6) da 1 y waived(2) da 0
-  //los BUG van del 1 al 6, asi que basta con buscar el digito letra por letra
+  //los BUG van del 1 al 7, asi que basta con buscar el digito letra por letra
   function bit waived(int unsigned n);
     for (int i = 0; i < waive_bugs.len(); i++) begin
       if (waive_bugs.substr(i, i) == $sformatf("%0d", n))
@@ -150,8 +150,8 @@ class uart_env_cfg extends uvm_object;
   //Controles de la prueba
   int unsigned run_ral_reset = 1;              //1 = corre la prueba de reset del RAL al inicio
   int unsigned bus_timeout_cycles = 1000;      //tiempo maximo de cada acceso Wishbone
-  int unsigned timeout_cycles = 1000000000;    //watchdog: tiempo maximo de toda la secuencia, solo corta una corrida que se quedo pegada
-                                               //con baudios muy lentos (DL grande) hay que subirlo con +UART_TIMEOUT_CYCLES
+  int unsigned timeout_cycles = 200000000;     //watchdog: tiempo maximo de toda la secuencia, solo corta una corrida que se quedo pegada
+                                               //la corrida mas lenta de los casos usa unos 20 millones; con DL grande hay que subirlo con +UART_TIMEOUT_CYCLES
 
   //Se crea el constructor y adentro se crean todos los grupos y los cfg de los agentes
   function new(string name = "uart_env_cfg");

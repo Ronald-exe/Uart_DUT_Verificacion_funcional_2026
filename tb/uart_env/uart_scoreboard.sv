@@ -202,10 +202,16 @@ class uart_scoreboard extends uvm_scoreboard;
       if (rx_queue.size() == 0) begin
         //la cola esta vacia: el valor de RBR no esta definido (AMB-11) asi que no se compara
         //pero si el software vio DR = 1 y no habia nada que leer, algo esta mal
-        if (last_dr)
-          `uvm_error("SCB_RX_UNEXPECTED", "RBR entrego un dato sin caracter RX observado")
-        else
+        //BUG-07: si una lectura ciega cae justo cuando llega un caracter, el DUT deja DR en 1 con la FIFO vacia
+        //(uart_rfifo.v linea 266 no cambia la cuenta con push y pop a la vez; uart_regs.v linea 611 solo apaga DR con cuenta 1)
+        if (last_dr) begin
+          if (cfg.scb.waived(7))
+            `uvm_warning("SCB_RX_UNEXPECTED", "BUG-07 (dispensado): LSR dice DR = 1 con la FIFO RX vacia")
+          else
+            `uvm_error("SCB_RX_UNEXPECTED", "BUG-07: LSR dice DR = 1 pero no hay ningun caracter en la FIFO RX")
+        end else begin
           empty_reads++;
+        end
       end else begin
         expected = rx_queue.pop_front(); //pop_front saca el primero de la cola
         //Lectura ciega (AMB-11): el software leyo RBR sin que LSR dijera DR = 1

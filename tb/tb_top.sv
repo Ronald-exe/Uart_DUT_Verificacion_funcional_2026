@@ -110,7 +110,12 @@ module tb_top;
     .enable    (regs.enable),
     //para investigar los avisos de error perdidos en LSR: el borrado y el encendido de PE, FE y BI
     .lsr_mask     (regs.lsr_mask),
-    .lsr_err_rise ({regs.lsr4 & ~regs.lsr4_d, regs.lsr3 & ~regs.lsr3_d, regs.lsr2 & ~regs.lsr2_d})
+    .lsr_err_rise ({regs.lsr4 & ~regs.lsr4_d, regs.lsr3 & ~regs.lsr3_d, regs.lsr2 & ~regs.lsr2_d}),
+    //para investigar el BUG-07: DR, la cuenta de la FIFO RX y el push y pop
+    .dr           (regs.lsr0r),
+    .rf_count     (regs.rf_count),
+    .rf_push      (regs.rf_push_pulse),
+    .rf_pop       (regs.rf_pop)
   );
 
   // ---------------------------------------------------------------------------

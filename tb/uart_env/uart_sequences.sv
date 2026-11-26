@@ -165,6 +165,7 @@ class uart_main_vseq extends uvm_sequence;
   bit active_loop;              //1 si se activo loopback (MCR[4])
   bit active_irq;               //1 si el software atiende RX por interrupcion, 0 si por sondeo
   bit active_bc;                //1 si en esta corrida se manda un break TX (LCR[6])
+  bit [7:0] active_fcr;         //FCR que se escribio (nivel de disparo), para poder limpiar la FIFO RX con el mismo nivel
   longint unsigned planned_tx;  //total de escrituras TX planeadas, se le pasa al scoreboard al final
   longint unsigned planned_rx;  //total de caracteres RX planeados
 
@@ -329,6 +330,7 @@ class uart_main_vseq extends uvm_sequence;
     if (result !== active_lcr)
       `uvm_error("UART_LCR", "LCR no coincide con el formato solicitado")
     transfer(1, 2, fcr, result);                          //FCR
+    active_fcr = fcr & 8'hc1;                             //guardamos el nivel de disparo (sin los bits de limpiar)
     transfer(1, 1, ier, result);                          //IER
     transfer(1, 4, mcr, result);                          //MCR
     cfg.bus_lock.put(1);
@@ -424,6 +426,7 @@ class uart_main_vseq extends uvm_sequence;
     bit [7:0] lsr;
     bit [7:0] ignored;
     int unsigned delay_chars; //retraso de atencion en caracteres
+    int unsigned stuck;       //lecturas seguidas con DR = 1 despues de que termino el trafico RX
     //si se eligio servicio por interrupcion, ese servicio se encarga de todo
     if (active_irq) begin
       service_irq();
@@ -435,6 +438,16 @@ class uart_main_vseq extends uvm_sequence;
       access(0, 5, 0, lsr);       //lee LSR
       if (lsr[0]) begin
         access(0, 0, 0, ignored); //hay dato: lee RBR (lo compara el scoreboard)
+        //BUG-07: el DUT puede dejar DR en 1 con la FIFO vacia, y el software se quedaria leyendo para siempre
+        //si ya termino el trafico y la FIFO (16) se tendria que haber vaciado hace rato, la limpiamos con FCR[1]
+        //como haria un software real para recuperarse (el scoreboard tambien vacia su cola al ver FCR[1])
+        if (rx_done)
+          stuck++;
+        if (stuck > 20) begin
+          `uvm_warning("UART_DR_STUCK", "DR sigue en 1 despues del trafico: se limpia la FIFO RX (BUG-07)")
+          access(1, 2, active_fcr | 8'h02, ignored);
+          stuck = 0;
+        end
       end else begin
         if ($urandom_range(99, 0) < cfg.sw.blind_read_pct)
           access(0, 0, 0, ignored); //lectura ciega: lee RBR sin dato

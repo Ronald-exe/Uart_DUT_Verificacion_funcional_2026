@@ -36,7 +36,11 @@ module uart_sva
   input logic [2:0]                   tstate,  //estado del transmisor: 0 reposo, 1 bit de inicio, 2 datos...
   input logic                         enable,  //pulso de baudios (es lo mismo que sale por baud_o)
   input logic                         lsr_mask,     //1 en el primer ciclo de una lectura de LSR con DLAB = 0 (borra PE, FE, BI, EI)
-  input logic [2:0]                   lsr_err_rise  //{BI, FE, PE}: 1 en el ciclo en que el DUT quiere encender ese bit (flanco)
+  input logic [2:0]                   lsr_err_rise, //{BI, FE, PE}: 1 en el ciclo en que el DUT quiere encender ese bit (flanco)
+  input logic                         dr,           //LSR[0], dato listo
+  input logic [4:0]                   rf_count,     //cuantos caracteres tiene la FIFO RX
+  input logic                         rf_push,      //1 el ciclo en que el receptor mete un caracter a la FIFO RX
+  input logic                         rf_pop        //1 el ciclo en que una lectura de RBR saca un caracter
 );
   `include "uvm_macros.svh"
 
@@ -169,5 +173,13 @@ module uart_sva
   //en uart_regs.v el borrado gana (lsr2r <= lsr_mask ? 0 : ...), asi que ese aviso de error se pierde
   //este numero se compara con los avisos perdidos que cuenta el scoreboard (SCB_LSR_MISS)
   c_lsr_lost: cover property (lsr_mask && (lsr_err_rise != 3'b000));
+
+  //C-RX-01 y C-RX-02 (solo cover, para investigar el BUG-07)
+  //C-RX-01: push y pop al mismo tiempo con la FIFO RX vacia (una lectura ciega justo cuando llega un caracter)
+  //en uart_rfifo.v ese caso mueve los dos punteros pero deja la cuenta en 0
+  c_rx_push_pop_empty: cover property (rf_push && rf_pop && (rf_count == 0));
+  //C-RX-02: DR en 1 con la FIFO RX vacia durante 20 ciclos seguidos ([*20] = se repite 20 ciclos)
+  //la especificacion dice DR = 0 si no hay caracteres (seccion 4.7), asi que esto es el BUG-07
+  c_dr_stuck: cover property ((dr && (rf_count == 0)) [*20]);
 
 endmodule : uart_sva

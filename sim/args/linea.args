@@ -32,8 +32,8 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
-// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR, fallaria en cada escritura a MCR
-+UART_SCB_WAIVE_BUGS=1
+// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR; BUG-07: una lectura ciega puede dejar DR en 1 con la FIFO vacia
++UART_SCB_WAIVE_BUGS=1,7
 
 // Pocas iteraciones porque con DL de hasta 40 cada caracter tarda unas 8000 ciclos
 +UART_SW_ITER=5
