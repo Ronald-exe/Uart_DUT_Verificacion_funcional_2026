@@ -31,8 +31,6 @@ class uart_base_test extends uvm_test;
       `uvm_fatal("UART_VIF", "No se encontro mdm_vif")
     //Leemos los plusargs en un solo lugar (uart_env_cfg), antes de crear el ambiente
     cfg.parse_plusargs();
-    //Le avisamos al modulo de aserciones si el BUG-01 esta dispensado, asi apaga A-MDM-01 (seccion 11 del plan)
-    uvm_config_db#(bit)::set(null, "uart_sva", "bug01_waived", cfg.scb.waived(1));
     //Publicamos la configuracion para el ambiente y despues creamos el ambiente, que la va a buscar con get
     uvm_config_db#(uart_env_cfg)::set(this, "env", "cfg", cfg);
     env = uart_env::type_id::create("env", this);

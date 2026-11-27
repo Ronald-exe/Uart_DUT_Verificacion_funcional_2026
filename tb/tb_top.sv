@@ -100,8 +100,6 @@ module tb_top;
     .wb_ack_o  (wb_ack_o),
     .int_o     (int_o),
     .stx_pad_o (stx_pad_o),
-    .rts_pad_o (rts_pad_o),
-    .dtr_pad_o (dtr_pad_o),
     .lcr       (regs.lcr),
     .mcr       (regs.mcr),
     .msr       (regs.msr),

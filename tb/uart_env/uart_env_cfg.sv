@@ -149,7 +149,6 @@ class uart_env_cfg extends uvm_object;
 
   //Controles de la prueba
   int unsigned run_ral_reset = 1;              //1 = corre la prueba de reset del RAL al inicio
-  int unsigned bus_timeout_cycles = 1000;      //tiempo maximo de cada acceso Wishbone
   int unsigned timeout_cycles = 200000000;     //watchdog: tiempo maximo de toda la secuencia, solo corta una corrida que se quedo pegada
                                                //la corrida mas lenta de los casos usa unos 20 millones; con DL grande hay que subirlo con +UART_TIMEOUT_CYCLES
 
@@ -272,7 +271,6 @@ class uart_env_cfg extends uvm_object;
     read_uint("UART_SER_BAUD_ERR_MAX", ser_baud_err_max);
     read_uint("UART_MDM_TOGGLE_PCT", mdm.toggle_pct);
     read_uint("UART_RAL_HW_RESET", run_ral_reset);
-    read_uint("UART_BUS_TIMEOUT_CYCLES", bus_timeout_cycles);
     read_uint("UART_TIMEOUT_CYCLES", timeout_cycles);
 
     //2. Leemos las listas, el ultimo argumento dice si son porcentajes (1) o pesos (0)
@@ -314,7 +312,7 @@ class uart_env_cfg extends uvm_object;
     require(ser_baud_err_max <= 20, "UART_SER_BAUD_ERR_MAX va de 0 a 20");
     //a lo sumo un error por caracter, por eso los porcentajes de error juntos no pueden pasar de 100
     require(ser_parity_err_pct + ser_frame_err_pct + ser_break_pct <= 100, "Los porcentajes de error serie suman mas de 100");
-    require((bus_timeout_cycles > 0) && (timeout_cycles > 0), "Los timeouts deben ser positivos");
+    require(timeout_cycles > 0, "UART_TIMEOUT_CYCLES debe ser positivo");
 
     //5. Lista de lo que todavia no esta implementado, si alguno no esta en 0 la prueba se detiene
     //el caso sim/args/base.args los pone en 0, cada linea se quita cuando su soporte este listo (E3)

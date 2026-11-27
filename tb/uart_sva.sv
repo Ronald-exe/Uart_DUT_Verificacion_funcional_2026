@@ -5,7 +5,7 @@
 //asi puede mirar los pines y tambien senales internas (lcr, mcr, msr, dl, tstate)
 //Cada assert lleva su cover: el assert dice "nunca fallo" y el cover dice "y si paso la situacion", si no seria una prueba vacia
 //Si un assert falla da UVM_ERROR, asi cuenta en el resumen de UVM y make regress lo detecta
-//Pendiente: A-SER-02 (duracion de cada bit)
+//Pendiente: A-SER-02 (duracion de cada bit). La polaridad de RTS y DTR (BUG-01) la revisa el scoreboard
 `timescale 1ns/1ps
 `include "uart_defines.v"
 
@@ -26,8 +26,6 @@ module uart_sva
   //otros pines
   input logic                         int_o,
   input logic                         stx_pad_o,
-  input logic                         rts_pad_o,
-  input logic                         dtr_pad_o,
   //senales internas de uart_regs (en el bind se conectan como regs.lcr, regs.mcr, ...)
   input logic [7:0]                   lcr,     //formato de linea, bit 6 = break
   input logic [4:0]                   mcr,     //bit 0 DTR, 1 RTS, 2 OUT1, 3 OUT2, 4 loopback
@@ -153,23 +151,9 @@ module uart_sva
   a_baud_01b: assert property (p_baud_01b) else `uvm_error("A-BAUD-01", "Hay pulsos de baudios con DL = 0")
   c_baud_01b: cover property (dl == 0);
 
-  //A-MDM-01: RTS y DTR con la polaridad de la especificacion: bit de MCR en 1 -> pin en 0 (son activos en bajo)
-  //BUG-01 (AMB-03): el DUT pone el pin igual al bit (uart_regs.v linea 351), asi que esta asercion falla siempre
-  //por eso se revisa solo un ciclo despues de que cambia MCR (si no fallaria en cada ciclo) y fuera de loopback
-  property p_mdm_01;
-    ($changed(mcr[1:0]) && !mcr[4]) |=> ((rts_pad_o == !mcr[1]) && (dtr_pad_o == !mcr[0]));
-  endproperty
-  a_mdm_01: assert property (p_mdm_01) else `uvm_error("A-MDM-01", "BUG-01: RTS/DTR no estan invertidos respecto a MCR")
+  //C-MDM-01 (cover): MCR cambio RTS o DTR fuera de loopback
+  //la polaridad de RTS y DTR (BUG-01) la revisa el scoreboard con el monitor de modem, igual que los demas BUG
   c_mdm_01: cover property ($changed(mcr[1:0]) && !mcr[4]);
-
-  //Si el BUG-01 esta dispensado la prueba nos avisa por config_db y apagamos la asercion con $assertoff (seccion 11 del plan)
-  //esperamos 1ps porque la prueba lo publica en su build_phase, que pasa toda en el tiempo 0
-  initial begin
-    bit waived;
-    #1ps;
-    if (uvm_config_db#(bit)::get(null, "uart_sva", "bug01_waived", waived) && waived)
-      $assertoff(0, a_mdm_01);
-  end
 
   //C-LSR-01 (solo cover, para investigar): el DUT quiere encender PE, FE o BI en el mismo ciclo en que una lectura de LSR los borra
   //en uart_regs.v el borrado gana (lsr2r <= lsr_mask ? 0 : ...), asi que ese aviso de error se pierde

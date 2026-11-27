@@ -26,6 +26,7 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [7:0] lcr = 8'h03; //copia de LCR, la direccion 0 solo es THR/RBR cuando DLAB = 0 (si no es DLL)
   bit last_dr;           //ultimo valor de DR (LSR[0]) que leyo el software
   bit loop;              //copia de MCR[4]: en loopback lo que se escribe en THR vuelve a RBR y no sale por stx
+  bit [1:0] mcr_rts_dtr; //copia de MCR[1:0] = {RTS, DTR}, para revisar los pines RTS y DTR (BUG-01)
   bit [3:0] ier;         //copia de IER: que interrupciones estan habilitadas
   bit [1:0] fcr_tl = 2'b11; //copia de FCR[7:6], el nivel de disparo (reset = 14 caracteres)
 
@@ -39,10 +40,8 @@ class uart_scoreboard extends uvm_scoreboard;
   //Modelo de MSR (seccion 10 del plan): los 4 bits van en el mismo orden que MSR, {DCD, RI, DSR, CTS}
   bit [3:0] pins = 4'b1111;  //valor de los pines de entrada que vio el monitor de modem (en reposo estan en 1)
   bit [3:0] msr_delta;       //deltas esperados {DDCD, TERI, DDSR, DCTS} desde la ultima lectura de MSR
-  bit msr_unsure;            //1 si la ultima lectura cayo justo despues de un cambio: no sabemos que deltas borro
   longint unsigned cycle;           //ciclos desde el inicio, para la ventana de los sincronizadores
   longint unsigned last_pin_change; //ciclo del ultimo cambio en los pines de entrada
-  longint unsigned last_msr_read;   //ciclo de la ultima lectura de MSR con DLAB = 0
 
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
@@ -118,8 +117,10 @@ class uart_scoreboard extends uvm_scoreboard;
     if (index == 3)
       lcr = data; //escritura a LCR: guardamos la copia
     //escritura a MCR: guardamos el bit de loopback
-    else if (index == 4)
+    else if (index == 4) begin
       loop = data[4];
+      mcr_rts_dtr = data[1:0];
+    end
     //escritura a IER (direccion 1 con DLAB = 0): guardamos que interrupciones estan habilitadas
     else if ((index == 1) && !lcr[7])
       ier = data[3:0];
@@ -330,15 +331,17 @@ class uart_scoreboard extends uvm_scoreboard;
   function void observe_modem(modem_item it);
     bit [3:0] now;
     bit [3:0] changed;
+    bit [1:0] expected_pins;
+    //BUG-01 (AMB-03): la especificacion dice bit de MCR en 1 -> pin en 0 (RTS y DTR son activos en bajo)
+    //el DUT pone el pin igual al bit (uart_regs.v linea 351). Fuera de loopback revisamos los pines cada vez que el monitor publica
+    expected_pins = cfg.scb.waived(1) ? mcr_rts_dtr : ~mcr_rts_dtr;
+    if (!loop && ({it.rts, it.dtr} !== expected_pins))
+      `uvm_error("SCB_MDM", $sformatf("BUG-01: RTS/DTR=%02b, esperado %02b (MCR[1:0]=%02b; la especificacion dice invertido)", {it.rts, it.dtr}, expected_pins, mcr_rts_dtr))
     now = {it.dcd, it.ri, it.dsr, it.cts};
     changed = now ^ pins; //^ es xor: 1 en cada pin que cambio
     if (changed == 0)
       return; //solo cambiaron RTS o DTR, que son salidas
     last_pin_change = cycle;
-    //el DUT borra los deltas 2 ciclos despues de leer MSR (msi_reset, uart_regs.v linea 457)
-    //si el pin cambia justo en esos ciclos el borrado le puede ganar, asi que no sabemos si el delta quedo
-    if (cycle - last_msr_read < 4)
-      msr_unsure = 1;
     if (!loop || cfg.scb.waived(5)) begin
       msr_delta[0] |= changed[0]; //DCTS
       msr_delta[1] |= changed[1]; //DDSR
@@ -354,31 +357,26 @@ class uart_scoreboard extends uvm_scoreboard;
   //Revisa una lectura de MSR
   //  MSR[7:4] (estado): BUG-02 (AMB-04) la especificacion dice que es el INVERSO de los pines, el DUT pone los pines tal cual
   //  MSR[3:0] (deltas): los que anoto observe_modem desde la ultima lectura
-  //Ventana: el DUT pasa los pines por sincronizadores, un cambio tarda unos ciclos en llegar a MSR,
-  //por eso si el ultimo cambio fue hace menos de 8 ciclos no comparamos (tolerancia de la seccion 10 del plan)
+  //Ventana (tolerancia de la seccion 10 del plan): un cambio de pin tarda unos ciclos en llegar a MSR,
+  //por eso si el ultimo cambio fue hace menos de 8 ciclos no comparamos esta lectura
   //En loopback MSR[7:4] lo revisa la asercion A-LB-02 (sigue al MCR), aqui solo se revisan los deltas (BUG-05)
   function void check_msr(bit [7:0] msr);
     bit [3:0] expected_state;
-    if (cycle - last_pin_change < 8) begin
-      msr_unsure = 1; //no sabemos si el DUT ya habia visto el cambio
-    end else begin
+    if (cycle - last_pin_change >= 8) begin
       msr_checked++;
       expected_state = cfg.scb.waived(2) ? pins : ~pins;
       if (!loop && (msr[7:4] !== expected_state))
         `uvm_error("SCB_MSR", $sformatf("BUG-02: MSR[7:4]=%04b, esperado %04b (pines=%04b; la especificacion dice inverso)", msr[7:4], expected_state, pins))
-      if (!msr_unsure && (msr[3:0] !== msr_delta)) begin
+      if (msr[3:0] !== msr_delta) begin
         if (loop)
           `uvm_error("SCB_MSR", $sformatf("BUG-05: en loopback MSR[3:0]=%04b, esperado %04b (los pines externos no deberian tener efecto)", msr[3:0], msr_delta))
         else
           `uvm_error("SCB_MSR", $sformatf("MSR[3:0]=%04b, deltas esperados %04b (si solo difiere TERI, MSR[2], es el BUG-03)", msr[3:0], msr_delta))
       end
-      msr_unsure = 0;
     end
     //la lectura con DLAB = 0 borra los deltas (con DLAB = 1 no, AMB-14)
-    if (!lcr[7]) begin
+    if (!lcr[7])
       msr_delta = 0;
-      last_msr_read = cycle;
-    end
   endfunction
 
   //Procesa un caracter que salio por stx: se compara con el primero de la cola TX
@@ -434,9 +432,9 @@ class uart_scoreboard extends uvm_scoreboard;
         rx_in.flush();
         mdm_in.flush();
         msr_delta = 0;
-        msr_unsure = 0;
         lcr = 8'h03;
         loop = 0;
+        mcr_rts_dtr = 0;
         ier = 0;
         fcr_tl = 2'b11;
         last_dr = 0;

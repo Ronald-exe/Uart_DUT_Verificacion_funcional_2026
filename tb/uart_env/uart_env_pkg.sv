@@ -14,7 +14,10 @@ package uart_env_pkg;
   `include "uart_scoreboard.sv"   //usa la configuracion
   `include "uart_coverage.sv"     //usa la configuracion, escucha a los mismos monitores que el scoreboard
   `include "uart_vsequencer.sv"   //usa la configuracion y el RAL
-  `include "uart_sequences.sv"    //usa el secuenciador virtual
+  `include "uart_wb_seq.sv"       //un acceso al bus Wishbone
+  `include "uart_rx_seq.sv"       //caracteres que entran por srx
+  `include "uart_hw_reset_seq.sv" //prueba de reset del RAL
+  `include "uart_main_vseq.sv"    //secuencia principal, usa las tres anteriores y el secuenciador virtual
   `include "uart_env.sv"          //usa a todos los anteriores
   `include "uart_base_test.sv"    //usa el ambiente
 endpackage : uart_env_pkg
