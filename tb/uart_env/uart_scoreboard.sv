@@ -42,6 +42,7 @@ class uart_scoreboard extends uvm_scoreboard;
   bit [3:0] msr_delta;       //deltas esperados {DDCD, TERI, DDSR, DCTS} desde la ultima lectura de MSR
   longint unsigned cycle;           //ciclos desde el inicio, para la ventana de los sincronizadores
   longint unsigned last_pin_change; //ciclo del ultimo cambio en los pines de entrada
+  longint unsigned last_overrun;    //ciclo del ultimo overrun que vio el modelo
 
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
@@ -172,6 +173,7 @@ class uart_scoreboard extends uvm_scoreboard;
       rx_characters++;
       rx_lost++;
       oe_possible = 1;
+      last_overrun = cycle;
       if (cfg.scb.waived(4)) begin
         `uvm_warning("SCB_OVERRUN", $sformatf("BUG-04 (dispensado): overrun, el dato %02h pisa al mas viejo %02h", character_mask(it.data), rx_queue[0]))
         rx_queue[0] = character_mask(it.data);
@@ -250,7 +252,10 @@ class uart_scoreboard extends uvm_scoreboard;
       `uvm_error("SCB_LSR_OE", $sformatf("LSR=%02h marca overrun sin que la FIFO RX se llenara", lsr))
     lsr_seen |= lsr[4:2];
     if (!lcr[7]) begin
-      oe_possible = 0; //la lectura borra OE
+      //la lectura borra OE, salvo que el overrun haya sido hace menos de un bit:
+      //el monitor ve el caracter un poco antes de que el DUT lo meta a la FIFO, asi que el DUT puede marcar OE despues
+      if (cycle - last_overrun >= cfg.ser.bit_cycles())
+        oe_possible = 0;
       //despues de borrar, solo los caracteres que siguen en la FIFO pueden volver a encender un bit
       possible = 0;
       foreach (rx_flags[i])

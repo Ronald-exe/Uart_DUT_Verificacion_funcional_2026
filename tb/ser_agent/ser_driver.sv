@@ -59,10 +59,12 @@ class ser_driver extends uvm_driver #(ser_item);
 
     //1. Silencio: con glitch lo partimos en reposo, pulso corto y el resto en reposo
     //hasta un cuarto de bit, para que a mitad del inicio el DUT y el monitor ya vean un 1
-    //con gap = 0 no hay silencio donde meterlo
-    if (it.glitch && it.gap >= 1) begin
+    //el glitch va al principio del silencio y solo si el silencio es de 2 bits o mas:
+    //asi despues del pulso quedan mas de 1 bit en reposo antes del caracter de verdad
+    //(si quedara muy pegado, la revision del DUT a mitad del inicio caeria dentro del inicio real)
+    if (it.glitch && it.gap >= 2) begin
       pulso = $urandom_range(b / 4, 1);
-      antes = $urandom_range(it.gap * b / 2, 0);
+      antes = $urandom_range(b / 2, 0);
       put_bit(1'b1, antes);
       put_bit(1'b0, pulso);
       put_bit(1'b1, it.gap * b - antes - pulso);
