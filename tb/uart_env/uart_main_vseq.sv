@@ -270,6 +270,16 @@ class uart_main_vseq extends uvm_sequence;
     drain_rx();
   endtask
 
+  //Lectura al azar (knob rand_access_pct, hoja 12 del plan): lee un registro cualquiera para cubrir todas las direcciones
+  //incluye los registros de debug (8 y 12), que no cambian nada en el DUT
+  //no lee la direccion 0 (RBR) porque una lectura sin mirar LSR puede provocar el BUG-07,
+  //ni la 6 (MSR), que se revisa en los casos de modem
+  task random_read();
+    bit [4:0] addresses[] = '{1, 2, 3, 4, 5, 7, 8, 12};
+    bit [7:0] ignored;
+    access(0, addresses[$urandom_range(addresses.size() - 1, 0)], 0, ignored);
+  endtask
+
   //Servicio por sondeo: mientras llegan caracteres, lee LSR y si hay dato (DR = LSR[0]) lo saca de RBR
   //que la FIFO este vacia no basta para terminar, puede venir otro caracter en camino, por eso tambien se espera rx_done
   //el retraso de atencion (service_delay) sirve para provocar overrun y las lecturas ciegas para leer RBR vacio (AMB-11)
@@ -302,6 +312,8 @@ class uart_main_vseq extends uvm_sequence;
       end else begin
         if ($urandom_range(99, 0) < cfg.sw.blind_read_pct)
           access(0, 0, 0, ignored); //lectura ciega: lee RBR sin dato
+        if ($urandom_range(99, 0) < cfg.sw.rand_access_pct)
+          random_read();            //lectura de un registro al azar
         if (rx_done)
           break; //ya no viene nada mas, termina el servicio
       end

@@ -29,6 +29,9 @@ class uart_wb_seq extends uvm_sequence #(wb_item);
     lane = 3 - reg_index[1:0];
     it.adr = {reg_index[4:2], 2'b00};
     it.sel = 4'b1000 >> reg_index[1:0];
+    //los registros de debug (8 y 12) se leen con sel = 1111 y devuelven los 32 bits (plan, seccion 3.3)
+    if (reg_index >= 8)
+      it.sel = 4'b1111;
     it.we = write_access;
     it.data = '0;
     it.data[8 * lane +: 8] = write_data;

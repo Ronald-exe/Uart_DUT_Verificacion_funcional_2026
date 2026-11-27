@@ -316,7 +316,6 @@ class uart_env_cfg extends uvm_object;
 
     //5. Lista de lo que todavia no esta implementado, si alguno no esta en 0 la prueba se detiene
     //el caso sim/args/base.args los pone en 0, cada linea se quita cuando su soporte este listo (E3)
-    unsupported(sw.rand_access_pct, "Accesos de robustez");
     unsupported(sw.recfg_pct, "Reconfiguracion durante trafico");
     unsupported(sw.rst_pct, "Reset durante trafico");
     unsupported(wb.sel_odd_pct, "Seleccion WB irregular");

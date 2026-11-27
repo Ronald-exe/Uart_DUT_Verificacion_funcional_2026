@@ -88,6 +88,7 @@ class uart_scoreboard extends uvm_scoreboard;
       4'b0100: index = 1;
       4'b0010: index = 2;
       4'b0001: index = 3;
+      4'b1111: index = 0; //registros de debug (direcciones 8 y 12): no se comparan, solo se leen
       default: begin
         //en E2 solo se usan sel con un bit en 1, un sel raro aqui seria un error
         `uvm_error("SCB_SEL", "El modelo E2 requiere un SEL one-hot")
