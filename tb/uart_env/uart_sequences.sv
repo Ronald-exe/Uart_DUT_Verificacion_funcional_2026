@@ -111,6 +111,9 @@ class uart_rx_seq extends uvm_sequence #(ser_item);
       if ((kind == 2) && ((it.data & mask) == 0))
         kind = 0;
       it.err_kind = kind;
+      //Glitch: sorteo aparte de los errores, porque va en el silencio y no en el caracter
+      //solo si hay silencio (gap >= 1), si no, no hay donde ponerlo
+      it.glitch = ($urandom_range(99, 0) < cfg.ser_glitch_pct) && (it.gap >= 1);
       finish_item(it); //se lo entrega al driver serie y espera a que lo mande
     end
   endtask

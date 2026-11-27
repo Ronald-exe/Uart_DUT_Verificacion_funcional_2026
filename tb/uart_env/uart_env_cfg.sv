@@ -323,7 +323,6 @@ class uart_env_cfg extends uvm_object;
     unsupported(sw.rst_pct, "Reset durante trafico");
     unsupported(wb.sel_odd_pct, "Seleccion WB irregular");
     unsupported(ser_stop2_err_pct, "Inyeccion STOP2");
-    unsupported(ser_glitch_pct, "Glitch RX");
     unsupported(ser_baud_err_pct, "Desajuste de baud");
   endfunction
 

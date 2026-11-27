@@ -157,6 +157,10 @@ class uart_scoreboard extends uvm_scoreboard;
   //un caracter con error de paridad o de trama igual entra a la FIFO con su dato, solo se marca en LSR
   //un break entra como un caracter 0 (uart_receiver.v linea 402), el monitor ya lo entrega con data = 0
   function void observe_rx(ser_item it);
+    //Un glitch no es un caracter (AMB-13), el DUT lo descarta y nosotros tambien, solo lo cuenta cobertura
+    if (it.glitch)
+      return;
+
     //Overrun: la FIFO RX es de 16, si llega otro caracter con la FIFO llena se pierde uno y LSR marca OE
     //BUG-04 (AMB-10): la especificacion dice que se pierde el NUEVO y la FIFO queda igual,
     //pero el DUT escribe el dato nuevo encima del mas viejo (uart_rfifo.v, la memoria se escribe con we(push) aunque este llena)

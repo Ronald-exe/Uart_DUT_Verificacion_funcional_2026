@@ -1,4 +1,4 @@
-// Caso interrupciones: el software atiende RX por interrupcion (int_o + IIR) y hay errores de linea para que salte la de error de linea
+// Caso interrupciones: el software atiende RX por interrupcion (int_o + IIR) y hay errores de linea para que salte la de error de linea y glitch
 // Iterations and TX/RX burst sizes use the plan defaults (20 iterations, bursts of 0 to 20)
 // Leave line-format weights unchanged so supported formats can still vary across seeds
 
@@ -28,7 +28,7 @@
 +UART_SER_FRAME_ERR_PCT=5
 +UART_SER_BREAK_PCT=3
 +UART_SER_STOP2_ERR_PCT=0
-+UART_SER_GLITCH_PCT=0
++UART_SER_GLITCH_PCT=3
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 

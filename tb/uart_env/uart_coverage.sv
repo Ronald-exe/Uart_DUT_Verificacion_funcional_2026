@@ -99,7 +99,7 @@ class uart_coverage extends uvm_component;
   endgroup
 
   //cg_rx_char: se muestrea con cada caracter que entro por srx, igual que TX pero ademas con el tipo de error
-  covergroup cg_rx_char with function sample(bit [1:0] wls, bit stb, int unsigned par, int unsigned err);
+  covergroup cg_rx_char with function sample(bit [1:0] wls, bit stb, int unsigned par, int unsigned err, bit glitch);
     cp_wls: coverpoint wls {
       bins cinco = {0};
       bins seis  = {1};
@@ -126,6 +126,11 @@ class uart_coverage extends uvm_component;
     }
     x_par_wls: cross cp_par, cp_wls;
     x_err_stb: cross cp_err, cp_stb;
+    //Contamos los pulsos rechazados por separado de los errores de un caracter
+    cp_glitch: coverpoint glitch {
+      bins sin_glitch = {0};
+      bins glitch     = {1};
+    }
   endgroup
 
   //cg_lsr: se muestrea en cada lectura de LSR, cada bit en 0 y en 1
@@ -350,7 +355,7 @@ class uart_coverage extends uvm_component;
       while (mdm_in.try_get(mdm))
         observe_modem(mdm);
       while (rx_in.try_get(ch))
-        cg_rx_char.sample(lcr[1:0], lcr[2], parity_mode(), error_of(ch));
+        cg_rx_char.sample(lcr[1:0], lcr[2], parity_mode(), error_of(ch), ch.glitch);
       //3. contamos los ciclos libres del bus para el siguiente acceso
       if (!cfg.wb.vif.mon_cb.cyc)
         idle_cycles++;

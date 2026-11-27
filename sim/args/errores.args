@@ -1,4 +1,4 @@
-// Caso errores: igual que el caso base pero con errores de paridad, de trama y break en RX (valores del plan, seccion 7)
+// Caso errores: igual que el caso base pero con errores de paridad, de trama y break en RX (valores del plan, seccion 7) y glitch
 // Iterations and TX/RX burst sizes use the plan defaults (20 iterations, bursts of 0 to 20)
 // Leave line-format weights unchanged so supported formats can still vary across seeds
 
@@ -28,7 +28,7 @@
 +UART_SER_FRAME_ERR_PCT=5
 +UART_SER_BREAK_PCT=3
 +UART_SER_STOP2_ERR_PCT=0
-+UART_SER_GLITCH_PCT=0
++UART_SER_GLITCH_PCT=3
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
