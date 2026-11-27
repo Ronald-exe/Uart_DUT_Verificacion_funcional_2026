@@ -13,6 +13,7 @@ class ser_item extends uvm_sequence_item;
   //Error que el driver tiene que inyectar en este caracter, no es rand porque lo decide la secuencia con los knobs de error
   //  0 = ninguno, 1 = paridad invertida, 2 = bit de parada en 0 (error de trama), 3 = break (linea en 0 mas de un caracter)
   int unsigned err_kind;
+  bit glitch; //1 = pulso corto en 0 antes del caracter (AMB-13), lo decide la secuencia
 
   //Estos no son rand porque los llena el monitor cuando ve algo mal en la linea
   bit parity_err; //la paridad que se vio no coincide con la que deberia ser
@@ -26,7 +27,7 @@ class ser_item extends uvm_sequence_item;
 
   //Esta funcion arma un texto para el log, por ejemplo: "data=0x41 gap=3 err=0 pe=0 fe=0 bi=0"
   function string convert2string();
-    return $sformatf("data=0x%02h gap=%0d err=%0d pe=%0b fe=%0b bi=%0b", data, gap, err_kind, parity_err, frame_err, brk);
+    return $sformatf("data=0x%02h gap=%0d err=%0d glitch=%0b pe=%0b fe=%0b bi=%0b", data, gap, err_kind, glitch, parity_err, frame_err, brk);
   endfunction
 
 endclass

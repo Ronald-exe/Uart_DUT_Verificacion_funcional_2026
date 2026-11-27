@@ -47,7 +47,14 @@ class ser_monitor extends uvm_monitor;
       //2. Vamos a la mitad del bit de inicio y vemos que siga en 0, si volvio a 1 era un glitch (AMB-13)
       //desde aqui leemos siempre a la mitad de cada bit, igual que el receptor del DUT (AMB-12)
       wait_cycles(b / 2);
-      if (line() !== 1'b0) continue;
+      if (line() !== 1'b0) begin
+        //Avisamos a cobertura, el scoreboard lo ignora porque no es un caracter
+        it = ser_item::type_id::create("it");
+        it.glitch = 1;
+        `uvm_info("SER_MON", $sformatf("%s %s", is_tx ? "TX" : "RX", it.convert2string()), UVM_HIGH)
+        ap.write(it);
+        continue;
+      end
 
       //3. Creamos el item llamando a la fabrica y leemos los bits de dato, el LSB primero
       it = ser_item::type_id::create("it");

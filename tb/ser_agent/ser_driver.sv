@@ -44,6 +44,9 @@ class ser_driver extends uvm_driver #(ser_item);
   task drive_char(ser_item it);
     int unsigned b = cfg.bit_cycles(); //ciclos que dura cada bit y la fucnion se hizo en el ser_agent_cfg
 
+    int unsigned pulso; //duracion del glitch en ciclos
+    int unsigned antes; //silencio antes del pulso
+
     //Con DL = 0 el DUT no tiene baudios, asi que no mandamos nada, el valor de 0 no da baudios de velocidad, no se envia nada
     if (cfg.dl == 0) begin
       `uvm_warning("SER_DRV", "DL = 0: no se manda el caracter")
@@ -54,7 +57,18 @@ class ser_driver extends uvm_driver #(ser_item);
     //covert2string: Convierte el item en texto
     `uvm_info("SER_DRV", it.convert2string(), UVM_HIGH) //Sirve para ver qué carácter mandó el driver justo antes de mandarlo
 
-    put_bit(1'b1, it.gap * b);              //1. silencio: gap bits con la linea en 1
+    //1. Silencio: con glitch lo partimos en reposo, pulso corto y el resto en reposo
+    //hasta un cuarto de bit, para que a mitad del inicio el DUT y el monitor ya vean un 1
+    //con gap = 0 no hay silencio donde meterlo
+    if (it.glitch && it.gap >= 1) begin
+      pulso = $urandom_range(b / 4, 1);
+      antes = $urandom_range(it.gap * b / 2, 0);
+      put_bit(1'b1, antes);
+      put_bit(1'b0, pulso);
+      put_bit(1'b1, it.gap * b - antes - pulso);
+    end else begin
+      put_bit(1'b1, it.gap * b);
+    end
 
     //Break (err_kind = 3): en vez de un caracter dejamos la linea en 0 durante dos caracteres completos
     //el DUT reconoce el break despues de un caracter en 0 y guarda un solo caracter 0 con BI = 1
