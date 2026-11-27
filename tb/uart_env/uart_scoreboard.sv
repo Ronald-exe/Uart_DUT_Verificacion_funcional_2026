@@ -325,7 +325,8 @@ class uart_scoreboard extends uvm_scoreboard;
   //  DCTS, DDSR y DDCD: cualquier cambio de su pin
   //  TERI: BUG-03 (AMB-05) la especificacion dice solo cuando RI pasa de 0 a 1, el DUT lo enciende con cualquier cambio
   //        si el BUG-03 esta dispensado seguimos al RTL, si no a la especificacion
-  //en loopback los pines externos no deberian tener efecto (BUG-05), por eso ahi no se anotan deltas
+  //BUG-05 (AMB-15): en loopback los pines externos no deberian tener efecto, pero el DUT igual enciende los deltas con ellos
+  //  si el BUG-05 esta dispensado seguimos al RTL (los pines encienden deltas tambien en loopback), si no, en loopback no se anotan
   function void observe_modem(modem_item it);
     bit [3:0] now;
     bit [3:0] changed;
@@ -338,7 +339,7 @@ class uart_scoreboard extends uvm_scoreboard;
     //si el pin cambia justo en esos ciclos el borrado le puede ganar, asi que no sabemos si el delta quedo
     if (cycle - last_msr_read < 4)
       msr_unsure = 1;
-    if (!loop) begin
+    if (!loop || cfg.scb.waived(5)) begin
       msr_delta[0] |= changed[0]; //DCTS
       msr_delta[1] |= changed[1]; //DDSR
       msr_delta[3] |= changed[3]; //DDCD
@@ -355,20 +356,22 @@ class uart_scoreboard extends uvm_scoreboard;
   //  MSR[3:0] (deltas): los que anoto observe_modem desde la ultima lectura
   //Ventana: el DUT pasa los pines por sincronizadores, un cambio tarda unos ciclos en llegar a MSR,
   //por eso si el ultimo cambio fue hace menos de 8 ciclos no comparamos (tolerancia de la seccion 10 del plan)
-  //En loopback MSR[7:4] lo revisa la asercion A-LB-02 y los deltas son el BUG-05, por eso aqui no se revisa
+  //En loopback MSR[7:4] lo revisa la asercion A-LB-02 (sigue al MCR), aqui solo se revisan los deltas (BUG-05)
   function void check_msr(bit [7:0] msr);
     bit [3:0] expected_state;
-    if (loop)
-      return;
     if (cycle - last_pin_change < 8) begin
       msr_unsure = 1; //no sabemos si el DUT ya habia visto el cambio
     end else begin
       msr_checked++;
       expected_state = cfg.scb.waived(2) ? pins : ~pins;
-      if (msr[7:4] !== expected_state)
+      if (!loop && (msr[7:4] !== expected_state))
         `uvm_error("SCB_MSR", $sformatf("BUG-02: MSR[7:4]=%04b, esperado %04b (pines=%04b; la especificacion dice inverso)", msr[7:4], expected_state, pins))
-      if (!msr_unsure && (msr[3:0] !== msr_delta))
-        `uvm_error("SCB_MSR", $sformatf("MSR[3:0]=%04b, deltas esperados %04b (si solo difiere TERI, MSR[2], es el BUG-03)", msr[3:0], msr_delta))
+      if (!msr_unsure && (msr[3:0] !== msr_delta)) begin
+        if (loop)
+          `uvm_error("SCB_MSR", $sformatf("BUG-05: en loopback MSR[3:0]=%04b, esperado %04b (los pines externos no deberian tener efecto)", msr[3:0], msr_delta))
+        else
+          `uvm_error("SCB_MSR", $sformatf("MSR[3:0]=%04b, deltas esperados %04b (si solo difiere TERI, MSR[2], es el BUG-03)", msr[3:0], msr_delta))
+      end
       msr_unsure = 0;
     end
     //la lectura con DLAB = 0 borra los deltas (con DLAB = 1 no, AMB-14)

@@ -32,7 +32,7 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=0
 
-// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR
+// BUG dispensados: sus errores salen como aviso y no como error (ver la tabla de BUG del plan)
 +UART_SCB_WAIVE_BUGS=1
 
 // Pocas iteraciones porque con DL de hasta 40 cada caracter tarda unas 8000 ciclos

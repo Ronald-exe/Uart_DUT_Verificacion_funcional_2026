@@ -1,0 +1,39 @@
+//Caso modem_loop: loopback siempre y cambios en los pines de modem externos, que en loopback no deberian tener efecto (BUG-05)
+//Usamos los valores del plan: 20 iteraciones y rafagas TX y RX de 0 a 20
+//El formato de linea sigue variando entre semillas con los pesos por defecto
+
+//Dejamos los baudios rapidos para probar los cambios de modem sin esperas largas
+//Este caso usa trafico normal, sin break TX ni loopback
++UART_LCR_DL_ZERO_PCT=0
++UART_LCR_DL_FAST_MAX=8
++UART_LCR_DL_MAX=8
++UART_LCR_DL_TAIL_PCT=0
++UART_LCR_BC_PCT=0
++UART_MCR_LOOP_PCT=100
+
+//Servicio por interrupcion con IER[3] = 1: la interrupcion de modem hace que el software lea MSR y el scoreboard lo revise (CE-11 del plan)
+//Los otros estimulos del software quedan apagados igual que en el caso base
++UART_SW_MODE_WEIGHTS=1,0
++UART_SW_SERVICE_DELAY_MIN=0
++UART_SW_SERVICE_DELAY_MAX=0
++UART_SW_BLIND_READ_PCT=0
++UART_SW_RAND_ACCESS_PCT=0
++UART_SW_RECFG_PCT=0
++UART_SW_RST_PCT=0
+
+//Los accesos usan seleccion de byte normal y las tramas no llevan errores inyectados
+//Solo habilitamos los cambios de las cuatro entradas de modem
++UART_WB_SEL_ODD_PCT=0
++UART_SER_PARITY_ERR_PCT=0
++UART_SER_FRAME_ERR_PCT=0
++UART_SER_BREAK_PCT=0
++UART_SER_STOP2_ERR_PCT=0
++UART_SER_GLITCH_PCT=0
++UART_SER_BAUD_ERR_PCT=0
++UART_MDM_TOGGLE_PCT=20
+
+// BUG dispensados: sus errores salen como aviso y no como error (ver la tabla de BUG del plan)
++UART_SCB_WAIVE_BUGS=1,2,3,5
+
+//IER: dato disponible, THR vacio y error de linea al 50 %, modem siempre (bit 3)
++UART_IER_BIT_PCT=50,50,50,100

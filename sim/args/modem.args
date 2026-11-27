@@ -32,7 +32,7 @@
 +UART_SER_BAUD_ERR_PCT=0
 +UART_MDM_TOGGLE_PCT=20
 
-// BUG-01 dispensado (A-MDM-01 apagada): el DUT no invierte RTS y DTR, fallaria en cada escritura a MCR; BUG-02: MSR[7:4] no esta invertido; BUG-03: TERI con cualquier cambio de RI
+// BUG dispensados: sus errores salen como aviso y no como error (ver la tabla de BUG del plan)
 +UART_SCB_WAIVE_BUGS=1,2,3
 
 //IER: dato disponible, THR vacio y error de linea al 50 %, modem siempre (bit 3)

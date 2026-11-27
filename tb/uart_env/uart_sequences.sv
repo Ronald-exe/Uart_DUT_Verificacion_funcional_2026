@@ -548,6 +548,7 @@ class uart_main_vseq extends uvm_sequence;
             rx_done = 1;
           end
           service_rx();
+          send_modem(tx_count); //cambios en los pines externos: en loopback no deberian tener efecto (BUG-05)
         join
       end
       wait_temt();
