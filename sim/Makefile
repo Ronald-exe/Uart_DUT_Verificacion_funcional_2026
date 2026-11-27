@@ -6,6 +6,7 @@
 #   make run CASE=x            corre con los plusargs de args/x.args (un archivo por caso)
 #   make run ARGS="+UART_SW_ITER=5"   agrega plusargs sueltos encima del caso
 #   make regress CASE=x SEEDS=20      corre las semillas 1 a SEEDS y dice cuantas pasaron
+#   make regress_all SEEDS=5         corre todos los casos (CASES) y muestra un resumen
 #   make BUS8=1                compila la variante de bus de 8 bits
 #   make cov                   fusiona la cobertura y genera el reporte HTML
 #   make verdi                 abre Verdi con la base de datos de compilación
@@ -15,6 +16,7 @@ TEST  ?= uart_base_test
 SEED  ?= 1
 CASE  ?= base
 SEEDS ?= 20
+CASES ?= base errores loopback interrupciones overrun modem
 ARGS  ?=
 BUS8  ?= 0
 FSDB  ?= 0
@@ -46,7 +48,7 @@ SIMV_OPTS := +UVM_TESTNAME=$(TEST) +ntb_random_seed=$(SEED) \
              $(ARGS) -f args/$(CASE).args \
              -l run_$(CASE)_$(SEED).log
 
-.PHONY: all comp run regress cov verdi clean
+.PHONY: all comp run regress regress_all cov verdi clean
 
 all: comp run
 
@@ -71,6 +73,17 @@ regress:
 	  fi; \
 	done; \
 	echo "== $(CASE): $$pass pasaron, $$fail fallaron de $(SEEDS) =="
+
+# Corre cada caso con las mismas semillas y guarda solo su ultima linea, que es el resumen
+regress_all:
+	@# Vaciamos el resumen anterior para no mezclar corridas
+	@: > regress_resumen.txt
+	@# Cada regress corre sus semillas, tail guarda su resumen al final del archivo
+	@for c in $(CASES); do \
+	  $(MAKE) --no-print-directory regress CASE=$$c SEEDS=$(SEEDS) | tail -n 1 >> regress_resumen.txt; \
+	done
+	@# Mostramos juntos los resultados de todos los casos
+	@cat regress_resumen.txt
 
 # Solo el DUT cuenta para la cobertura de código.
 cov_hier.cfg:

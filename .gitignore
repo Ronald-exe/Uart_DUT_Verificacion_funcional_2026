@@ -14,6 +14,7 @@ sim/novas*
 sim/.fsm.sch.verilog.xml
 sim/coverage/
 sim/regression_*.txt
+sim/regress_resumen.txt
 sim/AN.DB/
 
 # Archivos de bloqueo de LibreOffice
