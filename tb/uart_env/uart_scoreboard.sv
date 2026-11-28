@@ -43,6 +43,7 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned cycle;           //ciclos desde el inicio, para la ventana de los sincronizadores
   longint unsigned last_pin_change; //ciclo del ultimo cambio en los pines de entrada
   longint unsigned last_overrun;    //ciclo del ultimo overrun que vio el modelo
+  longint unsigned last_reset;      //ultimo ciclo con reset activo
 
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
@@ -56,6 +57,7 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned rx_lost;       //caracteres RX que se perdieron por overrun (no se van a leer)
   longint unsigned msr_checked;   //lecturas de MSR revisadas
   longint unsigned tx_breaks;     //breaks vistos en stx con LCR[6] = 1
+  longint unsigned tx_cut;        //bytes escritos en THR que un reset corto antes de salir completos
   longint unsigned err_chars;     //caracteres RX con error que se leyeron de RBR
   longint unsigned err_missed;    //de esos, cuantos LSR nunca marco (chequeo B)
   longint unsigned err_missed_seq;//de los no marcados, cuantos venian justo despues de otro con el mismo error
@@ -426,6 +428,9 @@ class uart_scoreboard extends uvm_scoreboard;
       //Con reset activo botamos todo lo pendiente y volvemos LCR a su valor de reset
       //los totales no se reinician porque en E2 no hay reset en medio del trafico
       if (cfg.wb.vif.rst !== 1'b0) begin
+        //lo que estaba esperando salir por stx lo corta el reset: se cuenta como cortado, no como error
+        tx_cut += tx_queue.size();
+        last_reset = cycle;
         tx_queue.delete();
         rx_queue.delete();
         rx_flags.delete();
@@ -458,8 +463,11 @@ class uart_scoreboard extends uvm_scoreboard;
         if (pending[i].we)
           observe_write(pending[i]);
       end
+      //Justo despues de un reset (2 caracteres) los monitores pueden estar terminando un caracter que el reset corto:
+      //esos caracteres no son reales, se botan sin compararlos
       while (rx_in.try_get(serial))
-        observe_rx(serial);
+        if (cycle - last_reset >= 2 * cfg.ser.frame_cycles())
+          observe_rx(serial);
       while (mdm_in.try_get(modem))
         observe_modem(modem); //cambios de modem, antes de las lecturas (igual que RX)
       foreach (pending[i]) begin
@@ -467,7 +475,8 @@ class uart_scoreboard extends uvm_scoreboard;
           observe_read(pending[i]);
       end
       while (tx_in.try_get(serial))
-        observe_tx(serial);
+        if (cycle - last_reset >= 2 * cfg.ser.frame_cycles())
+          observe_tx(serial);
     end
   endtask
 
@@ -492,7 +501,7 @@ class uart_scoreboard extends uvm_scoreboard;
       `uvm_error("SCB_PENDING", "Quedaron datos sin comparar al terminar")
     //lo que se vio y comparo tiene que dar justo lo que se planeo
     //los caracteres perdidos por overrun se vieron en la linea pero nunca se leen de RBR, por eso se restan
-    if (targets_set && ((tx_writes != target_tx) || (tx_compared != target_tx) ||
+    if (targets_set && ((tx_writes - tx_cut != target_tx) || (tx_compared != target_tx) ||
                         (rx_characters != target_rx) || (rx_compared != target_rx - rx_lost)))
       `uvm_error("SCB_COUNTS", $sformatf("Objetivo TX/RX=%0d/%0d; THR=%0d TX=%0d RX=%0d RBR=%0d perdidos=%0d", target_tx, target_rx, tx_writes, tx_compared, rx_characters, rx_compared, rx_lost))
   endfunction

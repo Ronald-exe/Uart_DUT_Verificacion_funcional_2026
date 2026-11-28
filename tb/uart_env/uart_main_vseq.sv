@@ -79,6 +79,8 @@ class uart_main_vseq extends uvm_sequence;
   //la segunda vez se vuelve a cambiar todo, si no solo se releeria un registro que ya estaba en reset
   task ral_preamble();
     uart_hw_reset_seq seq;
+    uvm_reg_bit_bash_seq bash_seq; //secuencia de UVM: bit bash
+    uvm_reg_access_seq access_seq; //secuencia de UVM: puerta delantera contra trasera
     uvm_status_e status;
     seq = uart_hw_reset_seq::type_id::create("ral_reset");
     seq.vif = cfg.wb.vif;
@@ -107,6 +109,18 @@ class uart_main_vseq extends uvm_sequence;
     p_sequencer.regm.SCR.mirror(status, UVM_CHECK, UVM_BACKDOOR);
     if (status != UVM_IS_OK)
       `uvm_error("UART_RAL_STATUS", "Error backdoor en SCR")
+    //3. bit bash de UVM: escribe 1 y 0 en cada bit (uno por uno) y lo lee de vuelta, asi se prueba el acceso de cada campo
+    //solo IER y SCR, los demas se saltan (la lista de exclusiones y su razon estan en uart_base_test)
+    bash_seq = uvm_reg_bit_bash_seq::type_id::create("ral_bit_bash");
+    bash_seq.model = p_sequencer.regm;
+    `uvm_info("UART_RAL_BIT_BASH", "Bit bash en IER y SCR", UVM_LOW)
+    bash_seq.start(null);
+    //4. access de UVM: escribe por la puerta delantera y lee por la trasera, y al reves
+    //solo SCR, porque el scoreboard no ve las escrituras por la puerta trasera (ver uart_base_test)
+    access_seq = uvm_reg_access_seq::type_id::create("ral_access");
+    access_seq.model = p_sequencer.regm;
+    `uvm_info("UART_RAL_ACCESS", "Puerta delantera contra trasera en SCR", UVM_LOW)
+    access_seq.start(null);
   endtask
 
   //Configura el UART: elige un formato y lo deja fijo toda la corrida
@@ -343,6 +357,43 @@ class uart_main_vseq extends uvm_sequence;
     repeat (char_cycles()) @(cfg.wb.vif.drv_cb);
   endtask
 
+  //Reset con un caracter en camino (hoja 0.5 del plan, knob rst_pct), como el "reset con un byte en curso" del lab de SPI
+  //se hace una sola vez, al final de la prueba, asi despues no hay que reconfigurar ni resincronizar nada
+  //Pasos:
+  //  1. se manda UN caracter, TX o RX al azar
+  //  2. se espera un momento al azar DENTRO de ese caracter (nunca al final), asi el reset siempre lo corta
+  //  3. reset con el candado del bus tomado, asi ningun acceso Wishbone queda a medias
+  //  4. el espejo del RAL vuelve a sus valores de reset, igual que el DUT
+  //  5. se esperan 2 caracteres para que los monitores terminen el caracter cortado (el scoreboard lo ignora)
+  task reset_with_traffic();
+    uart_hw_reset_seq rst_seq;
+    bit [7:0] ignored;
+    rst_seq = uart_hw_reset_seq::type_id::create("rst_traffic");
+    rst_seq.vif = cfg.wb.vif;
+    //1. y 2.
+    if ($urandom_range(1, 0)) begin
+      access(1, 0, $urandom_range(255, 0), ignored); //TX: un byte a THR
+      repeat ($urandom_range(char_cycles() - cfg.ser.bit_cycles(), cfg.ser.bit_cycles())) @(cfg.wb.vif.drv_cb);
+    end else begin
+      fork
+        send_rx(1);                                  //RX: un caracter por srx (sin esperar a que termine)
+      join_none
+      while (cfg.ser.vif.mon_cb.srx !== 1'b0)        //esperamos el bit de inicio (despues del silencio)
+        @(cfg.ser.vif.mon_cb);
+      repeat ($urandom_range(char_cycles() - cfg.ser.bit_cycles(), 1)) @(cfg.wb.vif.drv_cb);
+    end
+    //3.
+    `uvm_info("UART_RESET", "Reset con un caracter en camino", UVM_LOW)
+    cfg.bus_lock.get(1);
+    rst_seq.reset_blk(p_sequencer.regm);
+    cfg.bus_lock.put(1);
+    //4.
+    p_sequencer.regm.reset();
+    p_sequencer.predictor.map = p_sequencer.regm.map_dlab0;
+    //5.
+    repeat (2 * char_cycles()) @(cfg.wb.vif.drv_cb);
+  endtask
+
   //Espera TEMT (LSR[6]): la FIFO TX y el registro de corrimiento vacios
   //no basta con la ultima escritura a THR, la FIFO puede estar vacia mientras todavia sale el ultimo caracter
   task wait_temt();
@@ -414,6 +465,9 @@ class uart_main_vseq extends uvm_sequence;
       wait_temt();
       repeat (3) @(cfg.wb.vif.drv_cb);
     end
+    //5. al final, con rst_pct de probabilidad, un reset con un caracter en camino
+    if ($urandom_range(99, 0) < cfg.sw.rst_pct)
+      reset_with_traffic();
   endtask
 
 endclass : uart_main_vseq

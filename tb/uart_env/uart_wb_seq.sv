@@ -28,6 +28,9 @@ class uart_wb_seq extends uvm_sequence #(wb_item);
     //el registro 0 va en el carril de arriba [31:24] y la direccion alineada dice el grupo (piso y puerta)
     lane = 3 - reg_index[1:0];
     it.adr = {reg_index[4:2], 2'b00};
+    //adr[1:0] no se usa con el bus de 32 bits (el registro lo elige sel, plan 3.3), asi que le ponemos un valor al azar:
+    //el DUT lo debe ignorar, y asi esos bits tambien se mueven (cobertura de toggle)
+    it.adr[1:0] = $urandom_range(3, 0);
     it.sel = 4'b1000 >> reg_index[1:0];
     //los registros de debug (8 y 12) se leen con sel = 1111 y devuelven los 32 bits (plan, seccion 3.3)
     if (reg_index >= 8)

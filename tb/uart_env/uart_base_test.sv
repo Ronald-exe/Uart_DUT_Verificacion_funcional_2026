@@ -36,21 +36,30 @@ class uart_base_test extends uvm_test;
     env = uart_env::type_id::create("env", this);
   endfunction
 
-  //En end_of_elaboration ya existe todo el ambiente, aqui elegimos que registros revisa la prueba de reset del RAL
-  //solo dejamos LCR, IER y SCR porque tienen un valor de reset estable que se puede leer y tienen puerta trasera
-  //a los demas les ponemos NO_REG_HW_RESET_TEST para que esa secuencia los salte, los otros chequeos no cambian
+  //En end_of_elaboration ya existe todo el ambiente, aqui elegimos que registros revisa cada secuencia de UVM del RAL
+  //(hw_reset, bit bash y access); a los que no aplican les ponemos la marca NO_REG_..._TEST con su razon (seccion 5.2 del enunciado)
   function void end_of_elaboration_phase(uvm_phase phase);
     uvm_reg registers[$]; //cola con todos los registros del RAL
     super.end_of_elaboration_phase(phase);
     env.regm.get_registers(registers);
     foreach (registers[i]) begin
+      //uvm_resource_db guarda la marca con el nombre completo del registro, cada secuencia de UVM la lee y lo salta
+      //hw_reset: solo LCR, IER y SCR (valor de reset estable y puerta trasera)
       if ((registers[i] != env.regm.LCR) &&
           (registers[i] != env.regm.IER) &&
-          (registers[i] != env.regm.SCR)) begin
-        //uvm_resource_db guarda la marca con el nombre completo del registro, la secuencia de reset la lee y lo salta
-        uvm_resource_db#(bit)::set({"REG::", registers[i].get_full_name()},
-                                  "NO_REG_HW_RESET_TEST", 1, this);
-      end
+          (registers[i] != env.regm.SCR))
+        uvm_resource_db#(bit)::set({"REG::", registers[i].get_full_name()}, "NO_REG_HW_RESET_TEST", 1, this);
+      //bit bash: solo IER y SCR
+      //LCR no: su bit 6 (break) pone stx en 0 y su bit 7 (DLAB) cambia que registro hay en las direcciones 0 y 1
+      //(LCR igual se revisa en hw_reset y en cada program_uart, que lo escribe y lo relee)
+      //los demas no: son FIFOs (RBR/THR), solo escritura (FCR), volatiles (IIR, LSR, MSR) o dependen de DLAB (DLL, DLM)
+      if ((registers[i] != env.regm.IER) &&
+          (registers[i] != env.regm.SCR))
+        uvm_resource_db#(bit)::set({"REG::", registers[i].get_full_name()}, "NO_REG_BIT_BASH_TEST", 1, this);
+      //access (escribe por una puerta y lee por la otra): solo SCR
+      //en los demas una escritura por la puerta trasera cambiaria el DUT sin que el monitor ni el scoreboard lo vean
+      if (registers[i] != env.regm.SCR)
+        uvm_resource_db#(bit)::set({"REG::", registers[i].get_full_name()}, "NO_REG_ACCESS_TEST", 1, this);
     end
   endfunction
 
