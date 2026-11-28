@@ -43,7 +43,8 @@ class uart_scoreboard extends uvm_scoreboard;
   longint unsigned cycle;           //ciclos desde el inicio, para la ventana de los sincronizadores
   longint unsigned last_pin_change; //ciclo del ultimo cambio en los pines de entrada
   longint unsigned last_overrun;    //ciclo del ultimo overrun que vio el modelo
-  longint unsigned last_reset;      //ultimo ciclo con reset activo
+  bit traffic_seen;      //1 cuando ya hubo trafico (una escritura a THR o un caracter por srx)
+  bit cut_by_reset;      //1 si llego un reset despues del trafico: lo que vean los monitores despues es el caracter cortado
 
   //Contadores, no basta con comparar cada byte, tambien hay que revisar que no falte ninguno
   longint unsigned tx_writes;     //escrituras a THR vistas
@@ -131,6 +132,7 @@ class uart_scoreboard extends uvm_scoreboard;
     //Loopback: una escritura a THR (direccion 0 con DLAB = 0) vuelve por adentro a la FIFO RX
     //se espera leerla de RBR igual que un caracter que entro por srx, sin errores de linea
     else if ((index == 0) && !lcr[7] && loop) begin
+      traffic_seen = 1;
       rx_queue.push_back(character_mask(data));
       rx_flags.push_back(3'b000);
       rx_characters++;
@@ -138,6 +140,7 @@ class uart_scoreboard extends uvm_scoreboard;
     //escritura a la direccion 0 con DLAB = 0 es THR: el byte va a la cola TX
     //con DLAB = 1 es DLL, por eso se revisa lcr[7], si no el divisor pareceria un dato TX
     else if ((index == 0) && !lcr[7]) begin
+      traffic_seen = 1;
       tx_queue.push_back(character_mask(data));
       tx_writes++;
       //la FIFO TX es de 16 (17 contando el que se esta transmitiendo), en E2 no se modela llenarla
@@ -185,6 +188,7 @@ class uart_scoreboard extends uvm_scoreboard;
       end
       return;
     end
+    traffic_seen = 1;
     rx_queue.push_back(character_mask(it.data));
     //guardamos sus errores en el mismo orden, {BI, FE, PE} igual que LSR[4:2]
     rx_flags.push_back({it.brk, it.frame_err, it.parity_err});
@@ -430,7 +434,9 @@ class uart_scoreboard extends uvm_scoreboard;
       if (cfg.wb.vif.rst !== 1'b0) begin
         //lo que estaba esperando salir por stx lo corta el reset: se cuenta como cortado, no como error
         tx_cut += tx_queue.size();
-        last_reset = cycle;
+        //los resets del principio (los del RAL) llegan antes del trafico; un reset despues del trafico es el reset final
+        if (traffic_seen)
+          cut_by_reset = 1;
         tx_queue.delete();
         rx_queue.delete();
         rx_flags.delete();
@@ -463,10 +469,10 @@ class uart_scoreboard extends uvm_scoreboard;
         if (pending[i].we)
           observe_write(pending[i]);
       end
-      //Justo despues de un reset (2 caracteres) los monitores pueden estar terminando un caracter que el reset corto:
-      //esos caracteres no son reales, se botan sin compararlos
+      //Despues del reset final los monitores pueden estar terminando un caracter que el reset corto:
+      //ese caracter no es real, se bota sin compararlo (despues del reset final ya no hay trafico)
       while (rx_in.try_get(serial))
-        if (cycle - last_reset >= 2 * cfg.ser.frame_cycles())
+        if (!cut_by_reset)
           observe_rx(serial);
       while (mdm_in.try_get(modem))
         observe_modem(modem); //cambios de modem, antes de las lecturas (igual que RX)
@@ -475,7 +481,7 @@ class uart_scoreboard extends uvm_scoreboard;
           observe_read(pending[i]);
       end
       while (tx_in.try_get(serial))
-        if (cycle - last_reset >= 2 * cfg.ser.frame_cycles())
+        if (!cut_by_reset)
           observe_tx(serial);
     end
   endtask
